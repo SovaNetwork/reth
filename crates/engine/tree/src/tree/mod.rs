@@ -31,7 +31,10 @@ use reth_engine_primitives::{
     OnForkChoiceUpdated,
 };
 use reth_errors::{ConsensusError, ProviderResult};
-use reth_evm::{execute::BlockExecutorProvider, system_calls::OnStateHook};
+use reth_evm::{
+    execute::{BlockExecutorProvider, Executor},
+    system_calls::OnStateHook,
+};
 use reth_payload_builder::PayloadBuilderHandle;
 use reth_payload_builder_primitives::PayloadBuilder;
 use reth_payload_primitives::PayloadBuilderAttributes;
@@ -39,7 +42,7 @@ use reth_primitives::{
     EthPrimitives, GotExpected, NodePrimitives, SealedBlockFor, SealedBlockWithSenders,
     SealedHeader,
 };
-use reth_primitives_traits::Block;
+use reth_primitives_traits::{Block, BlockBody};
 use reth_provider::{
     providers::ConsistentDbView, BlockReader, DBProvider, DatabaseProviderFactory,
     ExecutionOutcome, HashedPostStateProvider, ProviderError, StateCommitmentProvider,
@@ -57,7 +60,7 @@ use reth_trie::{
 };
 use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
 use reth_trie_parallel::root::{ParallelStateRoot, ParallelStateRootError};
-use revm_primitives::EvmState;
+use revm_primitives::{EvmState, TxEnv};
 use root::{StateRootComputeOutcome, StateRootConfig, StateRootTask};
 use std::{
     cmp::Ordering,
@@ -540,6 +543,8 @@ where
     engine_kind: EngineApiKind,
     /// state root task thread pool
     state_root_task_pool: Arc<rayon::ThreadPool>,
+    /// Parallel prewarming thread pool
+    prewarming_thread_pool: rayon::ThreadPool,
 }
 
 impl<N, P: Debug, E: Debug, T: EngineTypes + Debug, V: Debug> std::fmt::Debug
@@ -614,6 +619,12 @@ where
                 .expect("Failed to create proof worker thread pool"),
         );
 
+        let prewarming_thread_pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .thread_name(|i| format!("prewarm-worker-{}", i))
+            .build()
+            .expect("Failed to create prewarming worker thread pool");
+
         Self {
             provider,
             executor_provider,
@@ -633,6 +644,7 @@ where
             invalid_block_hook: Box::new(NoopInvalidBlockHook),
             engine_kind,
             state_root_task_pool,
+            prewarming_thread_pool,
         }
     }
 
@@ -2262,8 +2274,43 @@ where
         // prewarming
         let caches = ProviderCacheBuilder::default().build_caches();
         let cache_metrics = CachedStateMetrics::zeroed();
-        let state_provider =
-            CachedStateProvider::new_with_caches(state_provider, caches, cache_metrics);
+        let state_provider = CachedStateProvider::new_with_caches(
+            state_provider,
+            caches.clone(),
+            cache_metrics.clone(),
+        );
+
+        // TODO: move this logic somewhere better?
+        for tx in block.body().transactions() {
+            let Some(state_provider) = self.state_provider(block.parent_hash())? else {
+                error!(target: "engine::tree", parent=?block.parent_hash(), "Could not get state provider for prewarm");
+                continue
+            };
+
+            // use the caches to create a new executor
+            let state_provider = CachedStateProvider::new_with_caches(
+                state_provider,
+                caches.clone(),
+                cache_metrics.clone(),
+            );
+            let executor_provider = self.executor_provider.clone();
+
+            // TODO: helper for packing artificial blocks?
+            let header = block.header().clone();
+            let block_body = block.body().clone();
+            // here I want to do:
+            let block = N::Block::new(header, block_body);
+            self.prewarming_thread_pool.spawn(move || {
+                // create a new executor and disable nonce checks in the env
+                let mut executor =
+                    executor_provider.executor(StateProviderDatabase::new(&state_provider));
+                executor.init(Box::new(|tx_env: &mut TxEnv| {
+                    tx_env.nonce = None;
+                }));
+
+                // execute block...
+            });
+        }
 
         trace!(target: "engine::tree", block=?block.num_hash(), "Executing block");
         let executor = self.executor_provider.executor(StateProviderDatabase::new(&state_provider));

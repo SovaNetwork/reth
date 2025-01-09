@@ -2275,10 +2275,8 @@ where
 
         let persistence_not_in_progress = !self.persistence_state.in_progress();
 
-        let state_root_result = std::thread::scope(|scope| {
-            let (state_root_handle, state_hook, context_ptr) = if persistence_not_in_progress &&
-                self.config.use_state_root_task()
-            {
+        let (state_root_handle, state_hook, context_ptr) =
+            if persistence_not_in_progress && self.config.use_state_root_task() {
                 let consistent_view = ConsistentDbView::new_with_latest_tip(self.provider.clone())?;
 
                 let state_root_config = StateRootConfig::new_from_input(
@@ -2327,7 +2325,7 @@ where
                 let state_hook = state_root_task.state_hook();
 
                 (
-                    Some(state_root_task.spawn(scope)),
+                    Some(state_root_task.spawn()),
                     Box::new(state_hook) as Box<dyn OnStateHook>,
                     Some(context_ptr),
                 )
@@ -2335,143 +2333,135 @@ where
                 (None, Box::new(|_state: &EvmState| {}) as Box<dyn OnStateHook>, None)
             };
 
-            let execution_start = Instant::now();
-            let output = self.metrics.executor.execute_metered(executor, &block, state_hook)?;
-            let execution_time = execution_start.elapsed();
-            trace!(target: "engine::tree", elapsed = ?execution_time, ?block_number, "Executed block");
+        let execution_start = Instant::now();
+        let output = self.metrics.executor.execute_metered(executor, &block, state_hook)?;
+        let execution_time = execution_start.elapsed();
+        trace!(target: "engine::tree", elapsed = ?execution_time, ?block_number, "Executed block");
 
-            if let Err(err) = self.consensus.validate_block_post_execution(
-                &block,
-                PostExecutionInput::new(&output.receipts, &output.requests),
-            ) {
-                // call post-block hook
-                self.invalid_block_hook.on_invalid_block(
-                    &parent_block,
-                    &block.clone().seal_slow(),
-                    &output,
-                    None,
-                );
-                return Err(err.into())
-            }
+        if let Err(err) = self.consensus.validate_block_post_execution(
+            &block,
+            PostExecutionInput::new(&output.receipts, &output.requests),
+        ) {
+            // call post-block hook
+            self.invalid_block_hook.on_invalid_block(
+                &parent_block,
+                &block.clone().seal_slow(),
+                &output,
+                None,
+            );
+            return Err(err.into())
+        }
 
-            let hashed_state = self.provider.hashed_post_state(&output.state);
+        let hashed_state = self.provider.hashed_post_state(&output.state);
 
-            trace!(target: "engine::tree", block=?sealed_block.num_hash(), "Calculating block state root");
-            let root_time = Instant::now();
+        trace!(target: "engine::tree", block=?sealed_block.num_hash(), "Calculating block state root");
+        let root_time = Instant::now();
 
-            // We attempt to compute state root in parallel if we are currently not persisting
-            // anything to database. This is safe, because the database state cannot
-            // change until we finish parallel computation. It is important that nothing
-            // is being persisted as we are computing in parallel, because we initialize
-            // a different database transaction per thread and it might end up with a
-            // different view of the database.
-            let (state_root, trie_updates, root_elapsed) = if persistence_not_in_progress {
-                if self.config.use_state_root_task() {
-                    match state_root_handle
-                        .expect("state root handle must exist if use_state_root_task is true")
-                        .wait_for_result()
-                    {
-                        Ok(StateRootComputeOutcome {
-                            state_root: (task_state_root, task_trie_updates),
-                            time_from_last_update,
-                            ..
-                        }) => {
-                            info!(
-                                target: "engine::tree",
-                                block = ?sealed_block.num_hash(),
-                                ?task_state_root,
-                                task_elapsed = ?time_from_last_update,
-                                "Task state root finished"
-                            );
-
-                            if task_state_root != block.header().state_root() ||
-                                self.config.always_compare_trie_updates()
-                            {
-                                if task_state_root != block.header().state_root() {
-                                    debug!(target: "engine::tree", "Task state root does not match block state root");
-                                }
-
-                                let (regular_root, regular_updates) =
-                                    state_provider.state_root_with_updates(hashed_state.clone())?;
-
-                                if regular_root == block.header().state_root() {
-                                    let provider = self.provider.database_provider_ro()?;
-                                    compare_trie_updates(
-                                        provider.tx_ref(),
-                                        task_trie_updates.clone(),
-                                        regular_updates,
-                                    )
-                                    .map_err(ProviderError::from)?;
-                                } else {
-                                    debug!(target: "engine::tree", "Regular state root does not match block state root");
-                                }
+        // We attempt to compute state root in parallel if we are currently not persisting
+        // anything to database. This is safe, because the database state cannot
+        // change until we finish parallel computation. It is important that nothing
+        // is being persisted as we are computing in parallel, because we initialize
+        // a different database transaction per thread and it might end up with a
+        // different view of the database.
+        let (state_root, trie_updates, root_elapsed) = if persistence_not_in_progress {
+            if self.config.use_state_root_task() {
+                match state_root_handle
+                    .expect("state root handle must exist if use_state_root_task is true")
+                    .wait_for_result()
+                {
+                    Ok(StateRootComputeOutcome {
+                        state_root: (task_state_root, task_trie_updates),
+                        time_from_last_update,
+                        ..
+                    }) => {
+                        info!(
+                            target: "engine::tree",
+                            block = ?sealed_block.num_hash(),
+                            ?task_state_root,
+                            task_elapsed = ?time_from_last_update,
+                            "Task state root finished"
+                        );
+                        if task_state_root != block.header().state_root() ||
+                            self.config.always_compare_trie_updates()
+                        {
+                            if task_state_root != block.header().state_root() {
+                                debug!(target: "engine::tree", "Task state root does not match block state root");
                             }
 
-                            (task_state_root, task_trie_updates, time_from_last_update)
-                        }
-                        Err(error) => {
-                            info!(target: "engine::tree", ?error, "Failed to wait for state root task result");
-                            // Fall back to sequential calculation
-                            let (root, updates) =
+                            let (regular_root, regular_updates) =
                                 state_provider.state_root_with_updates(hashed_state.clone())?;
-                            (root, updates, root_time.elapsed())
+
+                            if regular_root == block.header().state_root() {
+                                let provider = self.provider.database_provider_ro()?;
+                                compare_trie_updates(
+                                    provider.tx_ref(),
+                                    task_trie_updates.clone(),
+                                    regular_updates,
+                                )
+                                .map_err(ProviderError::from)?;
+                            } else {
+                                debug!(target: "engine::tree", "Regular state root does not match block state root");
+                            }
                         }
+
+                        (task_state_root, task_trie_updates, time_from_last_update)
                     }
-                } else {
-                    match self
-                        .compute_state_root_parallel(block.header().parent_hash(), &hashed_state)
-                    {
-                        Ok(result) => {
-                            info!(
-                                target: "engine::tree",
-                                block = ?sealed_block.num_hash(),
-                                regular_state_root = ?result.0,
-                                "Regular root task finished"
-                            );
-                            (result.0, result.1, root_time.elapsed())
-                        }
-                        Err(ParallelStateRootError::Provider(ProviderError::ConsistentView(
-                            error,
-                        ))) => {
-                            debug!(target: "engine", %error, "Parallel state root computation failed consistency check, falling back");
-                            let (root, updates) =
-                                state_provider.state_root_with_updates(hashed_state.clone())?;
-                            (root, updates, root_time.elapsed())
-                        }
-                        Err(error) => return Err(InsertBlockErrorKind::Other(Box::new(error))),
+                    Err(error) => {
+                        info!(target: "engine::tree", ?error, "Failed to wait for state root task result");
+                        // Fall back to sequential calculation
+                        let (root, updates) =
+                            state_provider.state_root_with_updates(hashed_state.clone())?;
+                        (root, updates, root_time.elapsed())
                     }
                 }
             } else {
-                debug!(target: "engine::tree", block=?sealed_block.num_hash(), ?persistence_not_in_progress, "Failed to compute state root in parallel");
-                let (root, updates) =
-                    state_provider.state_root_with_updates(hashed_state.clone())?;
-                (root, updates, root_time.elapsed())
-            };
-
-            // clean up leaked context if needed
-            if let Some(context_ptr) = context_ptr {
-                // SAFETY: This is safe because:
-                // 1. the context pointer comes from Box::leak() and is therefore guaranteed to be
-                //    valid
-                // 2. we only cleanup after handle.wait_for_result() completes, ensuring the context
-                //    is no longer in use
-                // 3. we only reconstruct and drop the box once
-                // 4. the scope guarantees the context cannot outlive this function
-                unsafe {
-                    drop(Box::from_raw(context_ptr));
+                match self.compute_state_root_parallel(block.header().parent_hash(), &hashed_state)
+                {
+                    Ok(result) => {
+                        info!(
+                            target: "engine::tree",
+                            block = ?sealed_block.num_hash(),
+                            regular_state_root = ?result.0,
+                            "Regular root task finished"
+                        );
+                        (result.0, result.1, root_time.elapsed())
+                    }
+                    Err(ParallelStateRootError::Provider(ProviderError::ConsistentView(error))) => {
+                        debug!(target: "engine", %error, "Parallel state root computation failed consistency check, falling back");
+                        let (root, updates) =
+                            state_provider.state_root_with_updates(hashed_state.clone())?;
+                        (root, updates, root_time.elapsed())
+                    }
+                    Err(error) => return Err(InsertBlockErrorKind::Other(Box::new(error))),
                 }
             }
+        } else {
+            debug!(target: "engine::tree", block=?sealed_block.num_hash(), ?persistence_not_in_progress, "Failed to compute state root in parallel");
+            let (root, updates) = state_provider.state_root_with_updates(hashed_state.clone())?;
+            (root, updates, root_time.elapsed())
+        };
 
+        // clean up leaked context if needed
+        if let Some(context_ptr) = context_ptr {
+            // SAFETY: This is safe because:
+            // 1. the context pointer comes from Box::leak() and is therefore guaranteed to be valid
+            // 2. we only cleanup after handle.wait_for_result() completes, ensuring the context is
+            //    no longer in use
+            // 3. we only reconstruct and drop the box once
+            // 4. the scope guarantees the context cannot outlive this function
+            unsafe {
+                drop(Box::from_raw(context_ptr));
+            }
+        }
+
+        let (state_root, trie_output, hashed_state, output, root_elapsed) =
             Result::<_, InsertBlockErrorKind>::Ok((
                 state_root,
                 trie_updates,
                 hashed_state,
                 output,
                 root_elapsed,
-            ))
-        })?;
-
-        let (state_root, trie_output, hashed_state, output, root_elapsed) = state_root_result;
+            ))?;
 
         if state_root != block.header().state_root() {
             // call post-block hook

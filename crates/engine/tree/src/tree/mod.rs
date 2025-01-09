@@ -2276,7 +2276,7 @@ where
         let persistence_not_in_progress = !self.persistence_state.in_progress();
 
         let state_root_result = std::thread::scope(|scope| {
-            let (state_root_handle, state_hook) = if persistence_not_in_progress &&
+            let (state_root_handle, state_hook, context_ptr) = if persistence_not_in_progress &&
                 self.config.use_state_root_task()
             {
                 let consistent_view = ConsistentDbView::new_with_latest_tip(self.provider.clone())?;
@@ -2292,13 +2292,20 @@ where
                 let state_sorted = state_root_config.state_sorted.clone();
                 let prefix_sets = state_root_config.prefix_sets.clone();
 
-                // context will hold the values that need to be kept alive
-                let context =
-                    StateHookContext { provider_ro, nodes_sorted, state_sorted, prefix_sets };
+                // create the context that will hold all the values required to
+                // be kept alive and leak it to be used by the state root task,
+                // will be cleaned up later
+                let context = Box::leak(Box::new(StateHookContext {
+                    provider_ro,
+                    nodes_sorted,
+                    state_sorted,
+                    prefix_sets,
+                }));
 
-                // it is ok to leak here because we are in a scoped thread, the
-                // memory will be freed when the thread completes
-                let context = Box::leak(Box::new(context));
+                // convert context to raw pointer for later cleanup
+                // SAFETY: context's address is stable because it comes from Box::leak
+                let context_ptr =
+                    context as *mut StateHookContext<<P as DatabaseProviderFactory>::Provider>;
 
                 let blinded_provider_factory = ProofBlindedProviderFactory::new(
                     InMemoryTrieCursorFactory::new(
@@ -2318,9 +2325,14 @@ where
                     self.state_root_task_pool.clone(),
                 );
                 let state_hook = state_root_task.state_hook();
-                (Some(state_root_task.spawn(scope)), Box::new(state_hook) as Box<dyn OnStateHook>)
+
+                (
+                    Some(state_root_task.spawn(scope)),
+                    Box::new(state_hook) as Box<dyn OnStateHook>,
+                    Some(context_ptr),
+                )
             } else {
-                (None, Box::new(|_state: &EvmState| {}) as Box<dyn OnStateHook>)
+                (None, Box::new(|_state: &EvmState| {}) as Box<dyn OnStateHook>, None)
             };
 
             let execution_start = Instant::now();
@@ -2435,6 +2447,20 @@ where
                     state_provider.state_root_with_updates(hashed_state.clone())?;
                 (root, updates, root_time.elapsed())
             };
+
+            // clean up leaked context if needed
+            if let Some(context_ptr) = context_ptr {
+                // SAFETY: This is safe because:
+                // 1. the context pointer comes from Box::leak() and is therefore guaranteed to be
+                //    valid
+                // 2. we only cleanup after handle.wait_for_result() completes, ensuring the context
+                //    is no longer in use
+                // 3. we only reconstruct and drop the box once
+                // 4. the scope guarantees the context cannot outlive this function
+                unsafe {
+                    drop(Box::from_raw(context_ptr));
+                }
+            }
 
             Result::<_, InsertBlockErrorKind>::Ok((
                 state_root,

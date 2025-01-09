@@ -48,12 +48,8 @@ use reth_provider::{
 use reth_revm::database::StateProviderDatabase;
 use reth_stages_api::ControlFlow;
 use reth_trie::{
-    hashed_cursor::HashedPostStateCursorFactory,
-    prefix_set::TriePrefixSetsMut,
-    proof::ProofBlindedProviderFactory,
-    trie_cursor::InMemoryTrieCursorFactory,
-    updates::{TrieUpdates, TrieUpdatesSorted},
-    HashedPostState, HashedPostStateSorted, TrieInput,
+    hashed_cursor::HashedPostStateCursorFactory, proof::ProofBlindedProviderFactory,
+    trie_cursor::InMemoryTrieCursorFactory, updates::TrieUpdates, HashedPostState, TrieInput,
 };
 use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
 use reth_trie_parallel::root::{ParallelStateRoot, ParallelStateRootError};
@@ -479,15 +475,6 @@ pub enum TreeAction {
         /// The sync target head hash
         sync_target_head: B256,
     },
-}
-
-/// Context used to keep alive the required values when returning a state hook
-/// from a scoped thread.
-struct StateHookContext<P> {
-    provider_ro: P,
-    nodes_sorted: Arc<TrieUpdatesSorted>,
-    state_sorted: Arc<HashedPostStateSorted>,
-    prefix_sets: Arc<TriePrefixSetsMut>,
 }
 
 /// The engine API tree handler implementation.
@@ -2275,7 +2262,7 @@ where
 
         let persistence_not_in_progress = !self.persistence_state.in_progress();
 
-        let (state_root_handle, state_hook, context_ptr) =
+        let (state_root_handle, state_hook) =
             if persistence_not_in_progress && self.config.use_state_root_task() {
                 let consistent_view = ConsistentDbView::new_with_latest_tip(self.provider.clone())?;
 
@@ -2290,31 +2277,16 @@ where
                 let state_sorted = state_root_config.state_sorted.clone();
                 let prefix_sets = state_root_config.prefix_sets.clone();
 
-                // create the context that will hold all the values required to
-                // be kept alive and leak it to be used by the state root task,
-                // will be cleaned up later
-                let context = Box::leak(Box::new(StateHookContext {
-                    provider_ro,
-                    nodes_sorted,
-                    state_sorted,
-                    prefix_sets,
-                }));
-
-                // convert context to raw pointer for later cleanup
-                // SAFETY: context's address is stable because it comes from Box::leak
-                let context_ptr =
-                    context as *mut StateHookContext<<P as DatabaseProviderFactory>::Provider>;
-
                 let blinded_provider_factory = ProofBlindedProviderFactory::new(
                     InMemoryTrieCursorFactory::new(
-                        DatabaseTrieCursorFactory::new(context.provider_ro.tx_ref()),
-                        &context.nodes_sorted,
+                        DatabaseTrieCursorFactory::new(provider_ro.tx_ref()),
+                        &nodes_sorted,
                     ),
                     HashedPostStateCursorFactory::new(
-                        DatabaseHashedCursorFactory::new(context.provider_ro.tx_ref()),
-                        &context.state_sorted,
+                        DatabaseHashedCursorFactory::new(provider_ro.tx_ref()),
+                        &state_sorted,
                     ),
-                    context.prefix_sets.clone(),
+                    prefix_sets.clone(),
                 );
 
                 let state_root_task = StateRootTask::new(
@@ -2324,13 +2296,9 @@ where
                 );
                 let state_hook = state_root_task.state_hook();
 
-                (
-                    Some(state_root_task.spawn()),
-                    Box::new(state_hook) as Box<dyn OnStateHook>,
-                    Some(context_ptr),
-                )
+                (Some(state_root_task.spawn()), Box::new(state_hook) as Box<dyn OnStateHook>)
             } else {
-                (None, Box::new(|_state: &EvmState| {}) as Box<dyn OnStateHook>, None)
+                (None, Box::new(|_state: &EvmState| {}) as Box<dyn OnStateHook>)
             };
 
         let execution_start = Instant::now();
@@ -2440,19 +2408,6 @@ where
             let (root, updates) = state_provider.state_root_with_updates(hashed_state.clone())?;
             (root, updates, root_time.elapsed())
         };
-
-        // clean up leaked context if needed
-        if let Some(context_ptr) = context_ptr {
-            // SAFETY: This is safe because:
-            // 1. the context pointer comes from Box::leak() and is therefore guaranteed to be valid
-            // 2. we only cleanup after handle.wait_for_result() completes, ensuring the context is
-            //    no longer in use
-            // 3. we only reconstruct and drop the box once
-            // 4. the scope guarantees the context cannot outlive this function
-            unsafe {
-                drop(Box::from_raw(context_ptr));
-            }
-        }
 
         let (state_root, trie_output, hashed_state, output, root_elapsed) =
             Result::<_, InsertBlockErrorKind>::Ok((

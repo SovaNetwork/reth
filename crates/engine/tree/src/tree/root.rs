@@ -979,17 +979,16 @@ mod tests {
             prefix_sets: Arc::new(input.prefix_sets),
         };
         let provider = config.consistent_view.provider_ro().unwrap();
-        let blinded_provider_factory = ProofBlindedProviderFactory::new(
-            InMemoryTrieCursorFactory::new(
-                DatabaseTrieCursorFactory::new(provider.tx_ref()),
-                &nodes_sorted,
-            ),
-            HashedPostStateCursorFactory::new(
-                DatabaseHashedCursorFactory::new(provider.tx_ref()),
-                &state_sorted,
-            ),
-            config.prefix_sets.clone(),
-        );
+        let trie_cursor = Arc::new(InMemoryTrieCursorFactory::new(
+            DatabaseTrieCursorFactory::new(provider.tx_ref()),
+            nodes_sorted.clone(),
+        ));
+        let state_cursor = Arc::new(HashedPostStateCursorFactory::new(
+            DatabaseHashedCursorFactory::new(provider.tx_ref()),
+            state_sorted.clone(),
+        ));
+        let blinded_provider_factory =
+            ProofBlindedProviderFactory::new(trie_cursor, state_cursor, config.prefix_sets.clone());
         let num_threads =
             std::thread::available_parallelism().map_or(1, |num| (num.get() / 2).max(1));
 

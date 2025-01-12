@@ -162,11 +162,11 @@ where
                     let cursor_start = Instant::now();
                     let trie_cursor_factory = InMemoryTrieCursorFactory::new(
                         DatabaseTrieCursorFactory::new(provider_ro.tx_ref()),
-                        &trie_nodes_sorted,
+                        trie_nodes_sorted.clone(),
                     );
                     let hashed_cursor_factory = HashedPostStateCursorFactory::new(
                         DatabaseHashedCursorFactory::new(provider_ro.tx_ref()),
-                        &hashed_state_sorted,
+                        hashed_state_sorted.clone(),
                     );
                     trace!(
                         target: "trie::parallel",
@@ -177,8 +177,8 @@ where
 
                     let proof_start = Instant::now();
                     let proof_result = StorageProof::new_hashed(
-                        trie_cursor_factory,
-                        hashed_cursor_factory,
+                        Arc::new(trie_cursor_factory),
+                        Arc::new(hashed_cursor_factory),
                         hashed_address,
                     )
                     .with_prefix_set_mut(PrefixSetMut::from(prefix_set.iter().cloned()))
@@ -215,11 +215,11 @@ where
         let provider_ro = self.view.provider_ro()?;
         let trie_cursor_factory = InMemoryTrieCursorFactory::new(
             DatabaseTrieCursorFactory::new(provider_ro.tx_ref()),
-            &self.nodes_sorted,
+            self.nodes_sorted.clone(),
         );
         let hashed_cursor_factory = HashedPostStateCursorFactory::new(
             DatabaseHashedCursorFactory::new(provider_ro.tx_ref()),
-            &self.state_sorted,
+            self.state_sorted.clone(),
         );
 
         // Create the walker.
@@ -265,8 +265,8 @@ where
                         None => {
                             tracker.inc_missed_leaves();
                             StorageProof::new_hashed(
-                                trie_cursor_factory.clone(),
-                                hashed_cursor_factory.clone(),
+                                Arc::new(trie_cursor_factory.clone()),
+                                Arc::new(hashed_cursor_factory.clone()),
                                 hashed_address,
                             )
                             .with_prefix_set_mut(Default::default())
@@ -416,7 +416,9 @@ mod tests {
             )
             .multiproof(targets.clone())
             .unwrap(),
-            Proof::new(trie_cursor_factory, hashed_cursor_factory).multiproof(targets).unwrap()
+            Proof::new(Arc::new(trie_cursor_factory), Arc::new(hashed_cursor_factory))
+                .multiproof(targets)
+                .unwrap()
         );
     }
 }

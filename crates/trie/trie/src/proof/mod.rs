@@ -17,6 +17,9 @@ use reth_trie_common::{
     proof::ProofRetainer, AccountProof, MultiProof, MultiProofTargets, StorageMultiProof,
 };
 
+extern crate alloc;
+use alloc::sync::Arc;
+
 mod blinded;
 pub use blinded::*;
 
@@ -28,9 +31,9 @@ pub use blinded::*;
 #[derive(Debug)]
 pub struct Proof<T, H> {
     /// The factory for traversing trie nodes.
-    trie_cursor_factory: T,
+    trie_cursor_factory: Arc<T>,
     /// The factory for hashed cursors.
-    hashed_cursor_factory: H,
+    hashed_cursor_factory: Arc<H>,
     /// A set of prefix sets that have changes.
     prefix_sets: TriePrefixSetsMut,
     /// Flag indicating whether to include branch node masks in the proof.
@@ -39,7 +42,7 @@ pub struct Proof<T, H> {
 
 impl<T, H> Proof<T, H> {
     /// Create a new [`Proof`] instance.
-    pub fn new(t: T, h: H) -> Self {
+    pub fn new(t: Arc<T>, h: Arc<H>) -> Self {
         Self {
             trie_cursor_factory: t,
             hashed_cursor_factory: h,
@@ -51,7 +54,7 @@ impl<T, H> Proof<T, H> {
     /// Set the trie cursor factory.
     pub fn with_trie_cursor_factory<TF>(self, trie_cursor_factory: TF) -> Proof<TF, H> {
         Proof {
-            trie_cursor_factory,
+            trie_cursor_factory: Arc::new(trie_cursor_factory),
             hashed_cursor_factory: self.hashed_cursor_factory,
             prefix_sets: self.prefix_sets,
             collect_branch_node_masks: self.collect_branch_node_masks,
@@ -62,7 +65,7 @@ impl<T, H> Proof<T, H> {
     pub fn with_hashed_cursor_factory<HF>(self, hashed_cursor_factory: HF) -> Proof<T, HF> {
         Proof {
             trie_cursor_factory: self.trie_cursor_factory,
-            hashed_cursor_factory,
+            hashed_cursor_factory: Arc::new(hashed_cursor_factory),
             prefix_sets: self.prefix_sets,
             collect_branch_node_masks: self.collect_branch_node_masks,
         }
@@ -188,9 +191,9 @@ where
 #[derive(Debug)]
 pub struct StorageProof<T, H> {
     /// The factory for traversing trie nodes.
-    trie_cursor_factory: T,
+    trie_cursor_factory: Arc<T>,
     /// The factory for hashed cursors.
-    hashed_cursor_factory: H,
+    hashed_cursor_factory: Arc<H>,
     /// The hashed address of an account.
     hashed_address: B256,
     /// The set of storage slot prefixes that have changed.
@@ -201,12 +204,12 @@ pub struct StorageProof<T, H> {
 
 impl<T, H> StorageProof<T, H> {
     /// Create a new [`StorageProof`] instance.
-    pub fn new(t: T, h: H, address: Address) -> Self {
+    pub fn new(t: Arc<T>, h: Arc<H>, address: Address) -> Self {
         Self::new_hashed(t, h, keccak256(address))
     }
 
     /// Create a new [`StorageProof`] instance with hashed address.
-    pub fn new_hashed(t: T, h: H, hashed_address: B256) -> Self {
+    pub fn new_hashed(t: Arc<T>, h: Arc<H>, hashed_address: B256) -> Self {
         Self {
             trie_cursor_factory: t,
             hashed_cursor_factory: h,
@@ -219,7 +222,7 @@ impl<T, H> StorageProof<T, H> {
     /// Set the trie cursor factory.
     pub fn with_trie_cursor_factory<TF>(self, trie_cursor_factory: TF) -> StorageProof<TF, H> {
         StorageProof {
-            trie_cursor_factory,
+            trie_cursor_factory: Arc::new(trie_cursor_factory),
             hashed_cursor_factory: self.hashed_cursor_factory,
             hashed_address: self.hashed_address,
             prefix_set: self.prefix_set,
@@ -231,7 +234,7 @@ impl<T, H> StorageProof<T, H> {
     pub fn with_hashed_cursor_factory<HF>(self, hashed_cursor_factory: HF) -> StorageProof<T, HF> {
         StorageProof {
             trie_cursor_factory: self.trie_cursor_factory,
-            hashed_cursor_factory,
+            hashed_cursor_factory: Arc::new(hashed_cursor_factory),
             hashed_address: self.hashed_address,
             prefix_set: self.prefix_set,
             collect_branch_node_masks: self.collect_branch_node_masks,

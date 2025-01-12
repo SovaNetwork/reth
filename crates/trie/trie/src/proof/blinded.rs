@@ -14,9 +14,9 @@ use tracing::trace;
 #[derive(Debug)]
 pub struct ProofBlindedProviderFactory<T, H> {
     /// The cursor factory for traversing trie nodes.
-    trie_cursor_factory: T,
+    trie_cursor_factory: Arc<T>,
     /// The factory for hashed cursors.
-    hashed_cursor_factory: H,
+    hashed_cursor_factory: Arc<H>,
     /// A set of prefix sets that have changes.
     prefix_sets: Arc<TriePrefixSetsMut>,
 }
@@ -24,8 +24,8 @@ pub struct ProofBlindedProviderFactory<T, H> {
 impl<T, H> ProofBlindedProviderFactory<T, H> {
     /// Create new proof-based blinded provider factory.
     pub const fn new(
-        trie_cursor_factory: T,
-        hashed_cursor_factory: H,
+        trie_cursor_factory: Arc<T>,
+        hashed_cursor_factory: Arc<H>,
         prefix_sets: Arc<TriePrefixSetsMut>,
     ) -> Self {
         Self { trie_cursor_factory, hashed_cursor_factory, prefix_sets }
@@ -62,9 +62,9 @@ where
 #[derive(Debug)]
 pub struct ProofBlindedAccountProvider<T, H> {
     /// The cursor factory for traversing trie nodes.
-    trie_cursor_factory: T,
+    trie_cursor_factory: Arc<T>,
     /// The factory for hashed cursors.
-    hashed_cursor_factory: H,
+    hashed_cursor_factory: Arc<H>,
     /// A set of prefix sets that have changes.
     prefix_sets: Arc<TriePrefixSetsMut>,
 }
@@ -72,8 +72,8 @@ pub struct ProofBlindedAccountProvider<T, H> {
 impl<T, H> ProofBlindedAccountProvider<T, H> {
     /// Create new proof-based blinded account node provider.
     pub const fn new(
-        trie_cursor_factory: T,
-        hashed_cursor_factory: H,
+        trie_cursor_factory: Arc<T>,
+        hashed_cursor_factory: Arc<H>,
         prefix_sets: Arc<TriePrefixSetsMut>,
     ) -> Self {
         Self { trie_cursor_factory, hashed_cursor_factory, prefix_sets }
@@ -103,9 +103,9 @@ where
 #[derive(Debug)]
 pub struct ProofBlindedStorageProvider<T, H> {
     /// The cursor factory for traversing trie nodes.
-    trie_cursor_factory: T,
+    trie_cursor_factory: Arc<T>,
     /// The factory for hashed cursors.
-    hashed_cursor_factory: H,
+    hashed_cursor_factory: Arc<H>,
     /// A set of prefix sets that have changes.
     prefix_sets: Arc<TriePrefixSetsMut>,
     /// Target account.
@@ -115,8 +115,8 @@ pub struct ProofBlindedStorageProvider<T, H> {
 impl<T, H> ProofBlindedStorageProvider<T, H> {
     /// Create new proof-based blinded storage node provider.
     pub const fn new(
-        trie_cursor_factory: T,
-        hashed_cursor_factory: H,
+        trie_cursor_factory: Arc<T>,
+        hashed_cursor_factory: Arc<H>,
         prefix_sets: Arc<TriePrefixSetsMut>,
         account: B256,
     ) -> Self {

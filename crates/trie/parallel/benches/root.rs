@@ -15,6 +15,9 @@ use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseStateRoot};
 use reth_trie_parallel::root::ParallelStateRoot;
 use std::collections::HashMap;
 
+extern crate alloc;
+use alloc::sync::Arc;
+
 pub fn calculate_state_root(c: &mut Criterion) {
     let mut group = c.benchmark_group("Calculate State Root");
     group.sample_size(20);
@@ -51,7 +54,7 @@ pub fn calculate_state_root(c: &mut Criterion) {
                 |(provider, sorted_state, prefix_sets)| {
                     let hashed_cursor_factory = HashedPostStateCursorFactory::new(
                         DatabaseHashedCursorFactory::new(provider.tx_ref()),
-                        &sorted_state,
+                        Arc::new(sorted_state),
                     );
                     StateRoot::from_tx(provider.tx_ref())
                         .with_hashed_cursor_factory(hashed_cursor_factory)

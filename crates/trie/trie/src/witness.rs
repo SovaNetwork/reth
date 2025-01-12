@@ -93,10 +93,12 @@ where
         }
 
         let proof_targets = self.get_proof_targets(&state)?;
-        let multiproof =
-            Proof::new(self.trie_cursor_factory.clone(), self.hashed_cursor_factory.clone())
-                .with_prefix_sets_mut(self.prefix_sets.clone())
-                .multiproof(proof_targets.clone())?;
+        let multiproof = Proof::new(
+            Arc::new(self.trie_cursor_factory.clone()),
+            Arc::new(self.hashed_cursor_factory.clone()),
+        )
+        .with_prefix_sets_mut(self.prefix_sets.clone())
+        .multiproof(proof_targets.clone())?;
 
         // Record all nodes from multiproof in the witness
         for account_node in multiproof.account_subtree.values() {
@@ -112,8 +114,8 @@ where
 
         let (tx, rx) = mpsc::channel();
         let proof_provider_factory = ProofBlindedProviderFactory::new(
-            self.trie_cursor_factory,
-            self.hashed_cursor_factory,
+            Arc::new(self.trie_cursor_factory),
+            Arc::new(self.hashed_cursor_factory),
             Arc::new(self.prefix_sets),
         );
         let mut sparse_trie =

@@ -10,6 +10,9 @@ use reth_trie::{
 #[cfg(feature = "metrics")]
 use reth_trie::metrics::{TrieRootMetrics, TrieType};
 
+extern crate alloc;
+use alloc::sync::Arc;
+
 /// Extends [`StorageRoot`] with operations specific for working with a database transaction.
 pub trait DatabaseStorageRoot<'a, TX> {
     /// Create a new storage root calculator from database transaction and raw address.
@@ -68,7 +71,10 @@ impl<'a, TX: DbTx> DatabaseStorageRoot<'a, TX>
             HashedPostState::from_hashed_storage(keccak256(address), hashed_storage).into_sorted();
         StorageRoot::new(
             DatabaseTrieCursorFactory::new(tx),
-            HashedPostStateCursorFactory::new(DatabaseHashedCursorFactory::new(tx), &state_sorted),
+            HashedPostStateCursorFactory::new(
+                DatabaseHashedCursorFactory::new(tx),
+                Arc::new(state_sorted),
+            ),
             address,
             prefix_set,
             #[cfg(feature = "metrics")]

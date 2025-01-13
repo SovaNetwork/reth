@@ -59,11 +59,13 @@ use reth_storage_api::{
 };
 use reth_storage_errors::provider::{ProviderResult, RootMismatch};
 use reth_trie::{
+    hashed_cursor::HashedCursorFactory,
     prefix_set::{PrefixSet, PrefixSetMut, TriePrefixSets},
+    trie_cursor::TrieCursorFactory,
     updates::{StorageTrieUpdates, TrieUpdates},
     HashedPostStateSorted, Nibbles, StateRoot, StoredNibbles,
 };
-use reth_trie_db::{DatabaseStateRoot, DatabaseStorageTrieCursor};
+use reth_trie_db::{DatabaseRef, DatabaseStorageTrieCursor};
 use revm::db::states::{
     PlainStateReverts, PlainStorageChangeset, PlainStorageRevert, StateChangeset,
 };
@@ -182,7 +184,7 @@ impl<TX: DbTx + 'static, N: NodeTypes> DatabaseProvider<TX, N> {
         let storage_history_prune_checkpoint =
             self.get_prune_checkpoint(PruneSegment::StorageHistory)?;
 
-        let mut state_provider = HistoricalStateProviderRef::new(self, block_number);
+        let mut state_provider = HistoricalStateProviderRef::new(Arc::new(*self), block_number);
 
         // If we pruned account or storage history, we can't return state on every historical block.
         // Instead, we should cap it at the latest prune checkpoint for corresponding prune segment.
@@ -256,10 +258,15 @@ impl<TX: DbTx + DbTxMut + 'static, N: NodeTypesForProvider> DatabaseProvider<TX,
     ///
     /// This includes calculating the resulted state root and comparing it with the parent block
     /// state root.
-    pub fn unwind_trie_state_range(
+    pub fn unwind_trie_state_range<T, H>(
         &self,
         range: RangeInclusive<BlockNumber>,
-    ) -> ProviderResult<()> {
+        state_root: StateRoot<T, H>,
+    ) -> ProviderResult<()>
+    where
+        T: TrieCursorFactory + Clone,
+        H: HashedCursorFactory + Clone,
+    {
         let changed_accounts = self
             .tx
             .cursor_read::<tables::AccountChangeSets>()?
@@ -311,7 +318,8 @@ impl<TX: DbTx + DbTxMut + 'static, N: NodeTypesForProvider> DatabaseProvider<TX,
             storage_prefix_sets,
             destroyed_accounts,
         };
-        let (new_state_root, trie_updates) = StateRoot::from_tx(&self.tx)
+
+        let (new_state_root, trie_updates) = state_root
             .with_prefix_sets(prefix_sets)
             .root_with_updates()
             .map_err(reth_db::DatabaseError::from)?;
@@ -2460,12 +2468,17 @@ impl<TX: DbTxMut + DbTx + 'static, N: NodeTypes> HashingWriter for DatabaseProvi
         Ok(hashed_storage_keys)
     }
 
-    fn insert_hashes(
+    fn insert_hashes<TC, HC>(
         &self,
         range: RangeInclusive<BlockNumber>,
         end_block_hash: B256,
         expected_state_root: B256,
-    ) -> ProviderResult<()> {
+        state_root: StateRoot<TC, HC>,
+    ) -> ProviderResult<()>
+    where
+        TC: TrieCursorFactory + Clone,
+        HC: HashedCursorFactory + Clone,
+    {
         // Initialize prefix sets.
         let mut account_prefix_set = PrefixSetMut::default();
         let mut storage_prefix_sets: HashMap<B256, PrefixSetMut> = HashMap::default();
@@ -2516,7 +2529,7 @@ impl<TX: DbTxMut + DbTx + 'static, N: NodeTypes> HashingWriter for DatabaseProvi
                     .collect(),
                 destroyed_accounts,
             };
-            let (state_root, trie_updates) = StateRoot::from_tx(&self.tx)
+            let (state_root, trie_updates) = state_root
                 .with_prefix_sets(prefix_sets)
                 .root_with_updates()
                 .map_err(reth_db::DatabaseError::from)?;
@@ -2674,14 +2687,19 @@ impl<TX: DbTxMut + DbTx + 'static, N: NodeTypes> HistoryWriter for DatabaseProvi
 impl<TX: DbTxMut + DbTx + 'static, N: NodeTypesForProvider + 'static> BlockExecutionWriter
     for DatabaseProvider<TX, N>
 {
-    fn take_block_and_execution_above(
+    fn take_block_and_execution_above<T, H>(
         &self,
         block: BlockNumber,
         remove_from: StorageLocation,
-    ) -> ProviderResult<Chain<Self::Primitives>> {
+        state_root: StateRoot<T, H>,
+    ) -> ProviderResult<Chain<Self::Primitives>>
+    where
+        T: TrieCursorFactory + Clone,
+        H: HashedCursorFactory + Clone,
+    {
         let range = block + 1..=self.last_block_number()?;
 
-        self.unwind_trie_state_range(range.clone())?;
+        self.unwind_trie_state_range(range.clone(), state_root)?;
 
         // get execution res
         let execution_state = self.take_state_above(block, remove_from)?;
@@ -2698,14 +2716,19 @@ impl<TX: DbTxMut + DbTx + 'static, N: NodeTypesForProvider + 'static> BlockExecu
         Ok(Chain::new(blocks, execution_state, None))
     }
 
-    fn remove_block_and_execution_above(
+    fn remove_block_and_execution_above<T, H>(
         &self,
         block: BlockNumber,
         remove_from: StorageLocation,
-    ) -> ProviderResult<()> {
+        state_root: StateRoot<T, H>,
+    ) -> ProviderResult<()>
+    where
+        T: TrieCursorFactory + Clone,
+        H: HashedCursorFactory + Clone,
+    {
         let range = block + 1..=self.last_block_number()?;
 
-        self.unwind_trie_state_range(range)?;
+        self.unwind_trie_state_range(range, state_root)?;
 
         // remove execution res
         self.remove_state_above(block, remove_from)?;
@@ -3133,5 +3156,13 @@ impl<TX: DbTx + 'static, N: NodeTypes + 'static> DBProvider for DatabaseProvider
 
     fn prune_modes_ref(&self) -> &PruneModes {
         self.prune_modes_ref()
+    }
+}
+
+impl<TX: DbTx, N: NodeTypes> DatabaseRef for DatabaseProvider<TX, N> {
+    type Tx = TX;
+
+    fn tx_reference(&self) -> &Self::Tx {
+        &self.tx
     }
 }

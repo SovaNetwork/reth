@@ -3,6 +3,7 @@ use auto_impl::auto_impl;
 use reth_db::models::{AccountBeforeTx, BlockNumberAddress};
 use reth_primitives::{Account, StorageEntry};
 use reth_storage_errors::provider::ProviderResult;
+use reth_trie::{hashed_cursor::HashedCursorFactory, trie_cursor::TrieCursorFactory, StateRoot};
 use std::{
     collections::{BTreeMap, BTreeSet},
     ops::{RangeBounds, RangeInclusive},
@@ -77,10 +78,14 @@ pub trait HashingWriter: Send + Sync {
     /// The hashes are calculated from `fork_block_number + 1` to `current_block_number`.
     ///
     /// The resulting state root is compared with `expected_state_root`.
-    fn insert_hashes(
+    fn insert_hashes<TC, HC>(
         &self,
         range: RangeInclusive<BlockNumber>,
         end_block_hash: B256,
         expected_state_root: B256,
-    ) -> ProviderResult<()>;
+        state_root: StateRoot<TC, HC>,
+    ) -> ProviderResult<()>
+    where
+        TC: TrieCursorFactory + Clone,
+        HC: HashedCursorFactory + Clone;
 }

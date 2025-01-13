@@ -5,7 +5,10 @@ use reth_node_types::NodePrimitives;
 use reth_primitives::SealedBlockWithSenders;
 use reth_storage_api::{NodePrimitivesProvider, StorageLocation};
 use reth_storage_errors::provider::ProviderResult;
-use reth_trie::{updates::TrieUpdates, HashedPostStateSorted};
+use reth_trie::{
+    hashed_cursor::HashedCursorFactory, trie_cursor::TrieCursorFactory, updates::TrieUpdates,
+    HashedPostStateSorted, StateRoot,
+};
 
 /// `BlockExecution` Writer
 pub trait BlockExecutionWriter:
@@ -17,11 +20,15 @@ pub trait BlockExecutionWriter:
     ///
     /// Accepts [`StorageLocation`] specifying from where should transactions and receipts be
     /// removed.
-    fn take_block_and_execution_above(
+    fn take_block_and_execution_above<TC, HC>(
         &self,
         block: BlockNumber,
         remove_from: StorageLocation,
-    ) -> ProviderResult<Chain<Self::Primitives>>;
+        state_root: StateRoot<TC, HC>,
+    ) -> ProviderResult<Chain<Self::Primitives>>
+    where
+        TC: TrieCursorFactory + Clone,
+        HC: HashedCursorFactory + Clone;
 
     /// Remove all of the blocks above the provided number and their execution result
     ///
@@ -29,28 +36,42 @@ pub trait BlockExecutionWriter:
     ///
     /// Accepts [`StorageLocation`] specifying from where should transactions and receipts be
     /// removed.
-    fn remove_block_and_execution_above(
+    fn remove_block_and_execution_above<TC, HC>(
         &self,
         block: BlockNumber,
         remove_from: StorageLocation,
-    ) -> ProviderResult<()>;
+        state_root: StateRoot<TC, HC>,
+    ) -> ProviderResult<()>
+    where
+        TC: TrieCursorFactory + Clone,
+        HC: HashedCursorFactory + Clone;
 }
 
 impl<T: BlockExecutionWriter> BlockExecutionWriter for &T {
-    fn take_block_and_execution_above(
+    fn take_block_and_execution_above<TC, HC>(
         &self,
         block: BlockNumber,
         remove_from: StorageLocation,
-    ) -> ProviderResult<Chain<Self::Primitives>> {
-        (*self).take_block_and_execution_above(block, remove_from)
+        state_root: StateRoot<TC, HC>,
+    ) -> ProviderResult<Chain<Self::Primitives>>
+    where
+        TC: TrieCursorFactory + Clone,
+        HC: HashedCursorFactory + Clone,
+    {
+        (*self).take_block_and_execution_above(block, remove_from, state_root)
     }
 
-    fn remove_block_and_execution_above(
+    fn remove_block_and_execution_above<TC, HC>(
         &self,
         block: BlockNumber,
         remove_from: StorageLocation,
-    ) -> ProviderResult<()> {
-        (*self).remove_block_and_execution_above(block, remove_from)
+        state_root: StateRoot<TC, HC>,
+    ) -> ProviderResult<()>
+    where
+        TC: TrieCursorFactory + Clone,
+        HC: HashedCursorFactory + Clone,
+    {
+        (*self).remove_block_and_execution_above(block, remove_from, state_root)
     }
 }
 

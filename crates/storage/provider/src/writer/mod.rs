@@ -51,9 +51,6 @@ impl<'a, ProviderDB, ProviderSF> UnifiedStorageWriter<'a, ProviderDB, ProviderSF
     }
 
     /// Returns a reference to the database writer.
-    ///
-    /// # Panics
-    /// If the database provider is not set.
     const fn database(&self) -> &ProviderDB {
         self.database
     }

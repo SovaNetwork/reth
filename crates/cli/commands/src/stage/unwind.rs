@@ -23,6 +23,8 @@ use reth_stages::{
     ExecutionStageThresholds, Pipeline, StageSet,
 };
 use reth_static_file::StaticFileProducer;
+use reth_trie::StateRoot;
+use reth_trie_db::DatabaseStateRoot;
 use std::sync::Arc;
 use tokio::sync::watch;
 use tracing::info;
@@ -84,10 +86,12 @@ impl<C: ChainSpecParser<ChainSpec: EthChainSpec + EthereumHardforks>> Command<C>
             pipeline.unwind(target, None)?;
         } else {
             info!(target: "reth::cli", ?target, "Executing a database unwind.");
-            let provider = provider_factory.provider_rw()?;
+            let provider = Arc::new(provider_factory.provider_rw()?);
+
+            state_root = StateRoot::from_provider(provider.clone());
 
             provider
-                .remove_block_and_execution_above(target, StorageLocation::Both)
+                .remove_block_and_execution_above(target, StorageLocation::Both, state_root)
                 .map_err(|err| eyre::eyre!("Transaction error on unwind: {err}"))?;
 
             // update finalized block if needed

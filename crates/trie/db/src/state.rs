@@ -1,4 +1,4 @@
-use crate::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory, PrefixSetLoader};
+use crate::{DatabaseHashedCursorFactory, DatabaseRef, DatabaseTrieCursorFactory, PrefixSetLoader};
 use alloy_primitives::{
     map::{AddressHashMap, B256HashMap},
     Address, BlockNumber, B256, U256,
@@ -23,9 +23,9 @@ extern crate alloc;
 use alloc::sync::Arc;
 
 /// Extends [`StateRoot`] with operations specific for working with a database transaction.
-pub trait DatabaseStateRoot<'a, TX>: Sized {
+pub trait DatabaseStateRoot<Provider>: Sized {
     /// Create a new [`StateRoot`] instance.
-    fn from_tx(tx: &'a TX) -> Self;
+    fn from_provider(provider: Arc<Provider>) -> Self;
 
     /// Given a block number range, identifies all the accounts and storage keys that
     /// have changed.
@@ -34,7 +34,7 @@ pub trait DatabaseStateRoot<'a, TX>: Sized {
     ///
     /// An instance of state root calculator with account and storage prefixes loaded.
     fn incremental_root_calculator(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<Self, StateRootError>;
 
@@ -45,7 +45,7 @@ pub trait DatabaseStateRoot<'a, TX>: Sized {
     ///
     /// The updated state root.
     fn incremental_root(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<B256, StateRootError>;
 
@@ -58,7 +58,7 @@ pub trait DatabaseStateRoot<'a, TX>: Sized {
     ///
     /// The updated state root and the trie updates.
     fn incremental_root_with_updates(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<(B256, TrieUpdates), StateRootError>;
 
@@ -69,7 +69,7 @@ pub trait DatabaseStateRoot<'a, TX>: Sized {
     ///
     /// The intermediate progress of state root computation.
     fn incremental_root_with_progress(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<StateRootProgress, StateRootError>;
 
@@ -105,22 +105,28 @@ pub trait DatabaseStateRoot<'a, TX>: Sized {
     /// # Returns
     ///
     /// The state root for this [`HashedPostState`].
-    fn overlay_root(tx: &'a TX, post_state: HashedPostState) -> Result<B256, StateRootError>;
+    fn overlay_root(
+        provider: Arc<Provider>,
+        post_state: HashedPostState,
+    ) -> Result<B256, StateRootError>;
 
     /// Calculates the state root for this [`HashedPostState`] and returns it alongside trie
     /// updates. See [`Self::overlay_root`] for more info.
     fn overlay_root_with_updates(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         post_state: HashedPostState,
     ) -> Result<(B256, TrieUpdates), StateRootError>;
 
     /// Calculates the state root for provided [`HashedPostState`] using cached intermediate nodes.
-    fn overlay_root_from_nodes(tx: &'a TX, input: TrieInput) -> Result<B256, StateRootError>;
+    fn overlay_root_from_nodes(
+        provider: Arc<Provider>,
+        input: TrieInput,
+    ) -> Result<B256, StateRootError>;
 
     /// Calculates the state root and trie updates for provided [`HashedPostState`] using
     /// cached intermediate nodes.
     fn overlay_root_from_nodes_with_updates(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         input: TrieInput,
     ) -> Result<(B256, TrieUpdates), StateRootError>;
 }
@@ -132,52 +138,59 @@ pub trait DatabaseHashedPostState<TX>: Sized {
     fn from_reverts<KH: KeyHasher>(tx: &TX, from: BlockNumber) -> Result<Self, DatabaseError>;
 }
 
-impl<'a, TX: DbTx> DatabaseStateRoot<'a, TX>
-    for StateRoot<DatabaseTrieCursorFactory<'a, TX>, DatabaseHashedCursorFactory<'a, TX>>
+impl<Provider: DatabaseRef> DatabaseStateRoot<Provider>
+    for StateRoot<DatabaseTrieCursorFactory<Provider>, DatabaseHashedCursorFactory<Provider>>
 {
-    fn from_tx(tx: &'a TX) -> Self {
-        Self::new(DatabaseTrieCursorFactory::new(tx), DatabaseHashedCursorFactory::new(tx))
+    fn from_provider(provider: Arc<Provider>) -> Self {
+        Self::new(
+            DatabaseTrieCursorFactory::new(provider.clone()),
+            DatabaseHashedCursorFactory::new(provider),
+        )
     }
 
     fn incremental_root_calculator(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<Self, StateRootError> {
-        let loaded_prefix_sets = PrefixSetLoader::<_, KeccakKeyHasher>::new(tx).load(range)?;
-        Ok(Self::from_tx(tx).with_prefix_sets(loaded_prefix_sets))
+        let loaded_prefix_sets =
+            PrefixSetLoader::<_, KeccakKeyHasher>::new(provider.clone()).load(range)?;
+        Ok(Self::from_provider(provider).with_prefix_sets(loaded_prefix_sets))
     }
 
     fn incremental_root(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<B256, StateRootError> {
         debug!(target: "trie::loader", ?range, "incremental state root");
-        Self::incremental_root_calculator(tx, range)?.root()
+        Self::incremental_root_calculator(provider, range)?.root()
     }
 
     fn incremental_root_with_updates(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<(B256, TrieUpdates), StateRootError> {
         debug!(target: "trie::loader", ?range, "incremental state root");
-        Self::incremental_root_calculator(tx, range)?.root_with_updates()
+        Self::incremental_root_calculator(provider, range)?.root_with_updates()
     }
 
     fn incremental_root_with_progress(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         range: RangeInclusive<BlockNumber>,
     ) -> Result<StateRootProgress, StateRootError> {
         debug!(target: "trie::loader", ?range, "incremental state root with progress");
-        Self::incremental_root_calculator(tx, range)?.root_with_progress()
+        Self::incremental_root_calculator(provider, range)?.root_with_progress()
     }
 
-    fn overlay_root(tx: &'a TX, post_state: HashedPostState) -> Result<B256, StateRootError> {
+    fn overlay_root(
+        provider: Arc<Provider>,
+        post_state: HashedPostState,
+    ) -> Result<B256, StateRootError> {
         let prefix_sets = post_state.construct_prefix_sets().freeze();
         let state_sorted = post_state.into_sorted();
         StateRoot::new(
-            DatabaseTrieCursorFactory::new(tx),
+            DatabaseTrieCursorFactory::new(provider.clone()),
             HashedPostStateCursorFactory::new(
-                DatabaseHashedCursorFactory::new(tx),
+                DatabaseHashedCursorFactory::new(provider),
                 Arc::new(state_sorted),
             ),
         )
@@ -186,15 +199,15 @@ impl<'a, TX: DbTx> DatabaseStateRoot<'a, TX>
     }
 
     fn overlay_root_with_updates(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         post_state: HashedPostState,
     ) -> Result<(B256, TrieUpdates), StateRootError> {
         let prefix_sets = post_state.construct_prefix_sets().freeze();
         let state_sorted = post_state.into_sorted();
         StateRoot::new(
-            DatabaseTrieCursorFactory::new(tx),
+            DatabaseTrieCursorFactory::new(provider.clone()),
             HashedPostStateCursorFactory::new(
-                DatabaseHashedCursorFactory::new(tx),
+                DatabaseHashedCursorFactory::new(provider),
                 Arc::new(state_sorted),
             ),
         )
@@ -202,16 +215,19 @@ impl<'a, TX: DbTx> DatabaseStateRoot<'a, TX>
         .root_with_updates()
     }
 
-    fn overlay_root_from_nodes(tx: &'a TX, input: TrieInput) -> Result<B256, StateRootError> {
+    fn overlay_root_from_nodes(
+        provider: Arc<Provider>,
+        input: TrieInput,
+    ) -> Result<B256, StateRootError> {
         let state_sorted = input.state.into_sorted();
         let nodes_sorted = input.nodes.into_sorted();
         StateRoot::new(
             InMemoryTrieCursorFactory::new(
-                DatabaseTrieCursorFactory::new(tx),
+                DatabaseTrieCursorFactory::new(provider.clone()),
                 Arc::new(nodes_sorted),
             ),
             HashedPostStateCursorFactory::new(
-                DatabaseHashedCursorFactory::new(tx),
+                DatabaseHashedCursorFactory::new(provider),
                 Arc::new(state_sorted),
             ),
         )
@@ -220,18 +236,18 @@ impl<'a, TX: DbTx> DatabaseStateRoot<'a, TX>
     }
 
     fn overlay_root_from_nodes_with_updates(
-        tx: &'a TX,
+        provider: Arc<Provider>,
         input: TrieInput,
     ) -> Result<(B256, TrieUpdates), StateRootError> {
         let state_sorted = input.state.into_sorted();
         let nodes_sorted = input.nodes.into_sorted();
         StateRoot::new(
             InMemoryTrieCursorFactory::new(
-                DatabaseTrieCursorFactory::new(tx),
+                DatabaseTrieCursorFactory::new(provider.clone()),
                 Arc::new(nodes_sorted),
             ),
             HashedPostStateCursorFactory::new(
-                DatabaseHashedCursorFactory::new(tx),
+                DatabaseHashedCursorFactory::new(provider),
                 Arc::new(state_sorted),
             ),
         )

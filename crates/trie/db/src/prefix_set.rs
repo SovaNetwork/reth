@@ -1,3 +1,4 @@
+use crate::DatabaseRef;
 use alloy_primitives::{
     map::{HashMap, HashSet},
     BlockNumber, B256,
@@ -17,26 +18,29 @@ use reth_trie::{
     KeyHasher, Nibbles,
 };
 
+extern crate alloc;
+use alloc::sync::Arc;
+
 /// A wrapper around a database transaction that loads prefix sets within a given block range.
 #[derive(Debug)]
-pub struct PrefixSetLoader<'a, TX, KH>(&'a TX, PhantomData<KH>);
+pub struct PrefixSetLoader<Provider, KH>(Arc<Provider>, PhantomData<KH>);
 
-impl<'a, TX, KH> PrefixSetLoader<'a, TX, KH> {
+impl<Provider, KH> PrefixSetLoader<Provider, KH> {
     /// Create a new loader.
-    pub const fn new(tx: &'a TX) -> Self {
-        Self(tx, PhantomData)
+    pub const fn new(provider: Arc<Provider>) -> Self {
+        Self(provider, PhantomData)
     }
 }
 
-impl<TX, KH> Deref for PrefixSetLoader<'_, TX, KH> {
-    type Target = TX;
+impl<Provider: DatabaseRef, KH> Deref for PrefixSetLoader<Provider, KH> {
+    type Target = Provider::Tx;
 
     fn deref(&self) -> &Self::Target {
-        self.0
+        self.0.tx_reference()
     }
 }
 
-impl<TX: DbTx, KH: KeyHasher> PrefixSetLoader<'_, TX, KH> {
+impl<Provider: DatabaseRef, KH: KeyHasher> PrefixSetLoader<Provider, KH> {
     /// Load all account and storage changes for the given block range.
     pub fn load(self, range: RangeInclusive<BlockNumber>) -> Result<TriePrefixSets, DatabaseError> {
         // Initialize prefix sets.

@@ -82,7 +82,7 @@ impl UnifiedStorageWriter<(), ()> {
     /// start-up.
     ///
     /// NOTE: If unwinding data from storage, use `commit_unwind` instead!
-    pub fn commit<P>(provider: P) -> ProviderResult<()>
+    pub fn commit<P>(provider: Arc<P>) -> ProviderResult<()>
     where
         P: DBProvider<Tx: DbTxMut> + StaticFileProviderFactory,
     {

@@ -77,7 +77,7 @@ use std::{
     sync::{mpsc, Arc},
 };
 use tokio::sync::watch;
-use tracing::{debug, trace};
+use tracing::debug;
 
 /// A [`DatabaseProvider`] that holds a read-only database transaction.
 pub type DatabaseProviderRO<DB, N> = DatabaseProvider<<DB as Database>::TX, N>;
@@ -165,23 +165,21 @@ impl<TX, N: NodeTypes> DatabaseProvider<TX, N> {
 }
 
 impl<TX: DbTx + 'static, N: NodeTypes> DatabaseProvider<TX, N> {
-    /// State provider for latest state
-    pub fn latest<'a>(&'a self) -> Box<dyn StateProvider + 'a> {
-        trace!(target: "providers::db", "Returning latest state provider");
-        Box::new(LatestStateProviderRef::new(Arc::new(*self)))
-    }
-
     /// Storage provider for state at that given block hash
-    pub fn history_by_block_hash<'a>(
+    pub fn history_by_block_hash<'a, P>(
         &'a self,
         block_hash: BlockHash,
-    ) -> ProviderResult<Box<dyn StateProvider + 'a>> {
+        provider: Arc<P>,
+    ) -> ProviderResult<Box<dyn StateProvider + 'a>>
+    where
+        P: DBProvider + DatabaseRef + BlockHashReader + StateCommitmentProvider + BlockNumReader,
+    {
         let mut block_number =
             self.block_number(block_hash)?.ok_or(ProviderError::BlockHashNotFound(block_hash))?;
         if block_number == self.best_block_number().unwrap_or_default() &&
             block_number == self.last_block_number().unwrap_or_default()
         {
-            return Ok(Box::new(LatestStateProviderRef::new(Arc::new(*self))))
+            return Ok(Box::new(LatestStateProviderRef::new(provider.clone())))
         }
 
         // +1 as the changeset that we want is the one that was applied after this block.
@@ -192,7 +190,7 @@ impl<TX: DbTx + 'static, N: NodeTypes> DatabaseProvider<TX, N> {
         let storage_history_prune_checkpoint =
             self.get_prune_checkpoint(PruneSegment::StorageHistory)?;
 
-        let mut state_provider = HistoricalStateProviderRef::new(Arc::new(*self), block_number);
+        let mut state_provider = HistoricalStateProviderRef::new(provider.clone(), block_number);
 
         // If we pruned account or storage history, we can't return state on every historical block.
         // Instead, we should cap it at the latest prune checkpoint for corresponding prune segment.
@@ -3172,5 +3170,17 @@ impl<TX: DbTx, N: NodeTypes> DatabaseRef for DatabaseProvider<TX, N> {
 
     fn tx_reference(&self) -> &Self::Tx {
         &self.tx
+    }
+}
+
+impl<TX: DbTx + Clone, N: NodeTypes> Clone for DatabaseProvider<TX, N> {
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            chain_spec: Arc::clone(&self.chain_spec),
+            static_file_provider: self.static_file_provider.clone(),
+            prune_modes: self.prune_modes.clone(),
+            storage: Arc::clone(&self.storage),
+        }
     }
 }

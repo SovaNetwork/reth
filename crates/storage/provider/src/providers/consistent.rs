@@ -2,9 +2,9 @@ use super::{DatabaseProviderRO, ProviderFactory, ProviderNodeTypes};
 use crate::{
     providers::StaticFileProvider, AccountReader, BlockHashReader, BlockIdReader, BlockNumReader,
     BlockReader, BlockReaderIdExt, BlockSource, ChainSpecProvider, ChangeSetReader, HeaderProvider,
-    ProviderError, PruneCheckpointReader, ReceiptProvider, ReceiptProviderIdExt,
-    StageCheckpointReader, StateReader, StaticFileProviderFactory, TransactionVariant,
-    TransactionsProvider, WithdrawalsProvider,
+    LatestStateProvider, ProviderError, PruneCheckpointReader, ReceiptProvider,
+    ReceiptProviderIdExt, StageCheckpointReader, StateReader, StaticFileProviderFactory,
+    TransactionVariant, TransactionsProvider, WithdrawalsProvider,
 };
 use alloy_consensus::{transaction::TransactionMeta, BlockHeader};
 use alloy_eips::{
@@ -49,7 +49,7 @@ use tracing::trace;
 #[doc(hidden)] // triggers ICE for `cargo docs`
 pub struct ConsistentProvider<N: ProviderNodeTypes> {
     /// Storage provider.
-    storage_provider: <ProviderFactory<N> as DatabaseProviderFactory>::Provider,
+    storage_provider: Arc<<ProviderFactory<N> as DatabaseProviderFactory>::Provider>,
     /// Head block at time of [`Self`] creation
     head_block: Option<Arc<BlockState<N::Primitives>>>,
     /// In-memory canonical state. This is not a snapshot, and can change! Use with caution.
@@ -74,7 +74,7 @@ impl<N: ProviderNodeTypes> ConsistentProvider<N> {
         // working under an older view), while the in-memory state may have deleted them
         // entirely. Resulting in gaps on the range.
         let head_block = state.head_state();
-        let storage_provider = storage_provider_factory.database_provider_ro()?;
+        let storage_provider = Arc::new(storage_provider_factory.database_provider_ro()?);
         Ok(Self { storage_provider, head_block, canonical_in_memory_state: state })
     }
 
@@ -112,7 +112,7 @@ impl<N: ProviderNodeTypes> ConsistentProvider<N> {
             Ok(self.block_state_provider_ref(state)?.boxed())
         } else {
             trace!(target: "providers::blockchain", "Using database state for latest state provider");
-            Ok(self.storage_provider.latest())
+            Ok(Box::new(LatestStateProvider::new(self.storage_provider.clone())))
         }
     }
 
@@ -124,7 +124,10 @@ impl<N: ProviderNodeTypes> ConsistentProvider<N> {
 
         self.get_in_memory_or_storage_by_block(
             block_hash.into(),
-            |_| self.storage_provider.history_by_block_hash(block_hash),
+            |_| {
+                self.storage_provider
+                    .history_by_block_hash(block_hash, self.storage_provider.clone())
+            },
             |block_state| {
                 let state_provider = self.block_state_provider_ref(block_state)?;
                 Ok(Box::new(state_provider))

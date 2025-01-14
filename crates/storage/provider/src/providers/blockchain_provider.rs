@@ -880,7 +880,7 @@ mod tests {
             .collect();
 
         let factory = create_test_provider_factory_with_chain_spec(chain_spec);
-        let provider_rw = factory.database_provider_rw()?;
+        let provider_rw = Arc::new(factory.database_provider_rw()?);
         let static_file_provider = factory.static_file_provider();
 
         // Write transactions to static files with the right `tx_num``

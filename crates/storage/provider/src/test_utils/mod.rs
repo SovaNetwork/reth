@@ -90,7 +90,16 @@ pub fn insert_genesis<N: ProviderNodeTypes<ChainSpec = ChainSpec>>(
         .map_err(reth_db::DatabaseError::from)?;
     provider.write_trie_updates(&updates).unwrap();
 
-    provider.commit()?;
-
-    Ok(root)
+    // get the inner provider by consuming the Arc
+    // this is safe because we know we have the only reference at this point
+    match Arc::try_unwrap(provider) {
+        Ok(provider) => {
+            provider.commit()?;
+            Ok(root)
+        }
+        Err(_) => {
+            // this should never happen in practice since we have the only Arc,
+            Err(reth_db::DatabaseError::Other("Failed to unwrap Arc<Provider>".into()).into())
+        }
+    }
 }

@@ -20,19 +20,22 @@ use reth_trie::{
     StorageMultiProof, StorageRoot, TrieInput,
 };
 use reth_trie_db::{
-    DatabaseProof, DatabaseStateRoot, DatabaseStorageProof, DatabaseStorageRoot,
+    DatabaseProof, DatabaseRef, DatabaseStateRoot, DatabaseStorageProof, DatabaseStorageRoot,
     DatabaseTrieWitness, StateCommitment,
 };
+
+extern crate alloc;
+use alloc::sync::Arc;
 
 /// State provider over latest state that takes tx reference.
 ///
 /// Wraps a [`DBProvider`] to get access to database.
 #[derive(Debug)]
-pub struct LatestStateProviderRef<'b, Provider>(&'b Provider);
+pub struct LatestStateProviderRef<Provider>(Arc<Provider>);
 
-impl<'b, Provider: DBProvider> LatestStateProviderRef<'b, Provider> {
+impl<Provider: DBProvider> LatestStateProviderRef<Provider> {
     /// Create new state provider
-    pub const fn new(provider: &'b Provider) -> Self {
+    pub const fn new(provider: Arc<Provider>) -> Self {
         Self(provider)
     }
 
@@ -41,14 +44,14 @@ impl<'b, Provider: DBProvider> LatestStateProviderRef<'b, Provider> {
     }
 }
 
-impl<Provider: DBProvider> AccountReader for LatestStateProviderRef<'_, Provider> {
+impl<Provider: DBProvider> AccountReader for LatestStateProviderRef<Provider> {
     /// Get basic account information.
     fn basic_account(&self, address: &Address) -> ProviderResult<Option<Account>> {
         self.tx().get_by_encoded_key::<tables::PlainAccountState>(address).map_err(Into::into)
     }
 }
 
-impl<Provider: BlockHashReader> BlockHashReader for LatestStateProviderRef<'_, Provider> {
+impl<Provider: BlockHashReader> BlockHashReader for LatestStateProviderRef<Provider> {
     /// Get block hash by number.
     fn block_hash(&self, number: u64) -> ProviderResult<Option<B256>> {
         self.0.block_hash(number)
@@ -63,16 +66,16 @@ impl<Provider: BlockHashReader> BlockHashReader for LatestStateProviderRef<'_, P
     }
 }
 
-impl<Provider: DBProvider + StateCommitmentProvider> StateRootProvider
-    for LatestStateProviderRef<'_, Provider>
+impl<Provider: DBProvider + StateCommitmentProvider + DatabaseRef> StateRootProvider
+    for LatestStateProviderRef<Provider>
 {
     fn state_root(&self, hashed_state: HashedPostState) -> ProviderResult<B256> {
-        StateRoot::overlay_root(self.tx(), hashed_state)
+        StateRoot::overlay_root(self.0.clone(), hashed_state)
             .map_err(|err| ProviderError::Database(err.into()))
     }
 
     fn state_root_from_nodes(&self, input: TrieInput) -> ProviderResult<B256> {
-        StateRoot::overlay_root_from_nodes(self.tx(), input)
+        StateRoot::overlay_root_from_nodes(self.0.clone(), input)
             .map_err(|err| ProviderError::Database(err.into()))
     }
 
@@ -80,7 +83,7 @@ impl<Provider: DBProvider + StateCommitmentProvider> StateRootProvider
         &self,
         hashed_state: HashedPostState,
     ) -> ProviderResult<(B256, TrieUpdates)> {
-        StateRoot::overlay_root_with_updates(self.tx(), hashed_state)
+        StateRoot::overlay_root_with_updates(self.0.clone(), hashed_state)
             .map_err(|err| ProviderError::Database(err.into()))
     }
 
@@ -88,20 +91,20 @@ impl<Provider: DBProvider + StateCommitmentProvider> StateRootProvider
         &self,
         input: TrieInput,
     ) -> ProviderResult<(B256, TrieUpdates)> {
-        StateRoot::overlay_root_from_nodes_with_updates(self.tx(), input)
+        StateRoot::overlay_root_from_nodes_with_updates(self.0.clone(), input)
             .map_err(|err| ProviderError::Database(err.into()))
     }
 }
 
-impl<Provider: DBProvider + StateCommitmentProvider> StorageRootProvider
-    for LatestStateProviderRef<'_, Provider>
+impl<Provider: DBProvider + StateCommitmentProvider + DatabaseRef> StorageRootProvider
+    for LatestStateProviderRef<Provider>
 {
     fn storage_root(
         &self,
         address: Address,
         hashed_storage: HashedStorage,
     ) -> ProviderResult<B256> {
-        StorageRoot::overlay_root(self.tx(), address, hashed_storage)
+        StorageRoot::overlay_root(self.0.clone(), address, hashed_storage)
             .map_err(|err| ProviderError::Database(err.into()))
     }
 
@@ -111,7 +114,7 @@ impl<Provider: DBProvider + StateCommitmentProvider> StorageRootProvider
         slot: B256,
         hashed_storage: HashedStorage,
     ) -> ProviderResult<reth_trie::StorageProof> {
-        StorageProof::overlay_storage_proof(self.tx(), address, slot, hashed_storage)
+        StorageProof::overlay_storage_proof(self.0.clone(), address, slot, hashed_storage)
             .map_err(ProviderError::from)
     }
 
@@ -121,13 +124,13 @@ impl<Provider: DBProvider + StateCommitmentProvider> StorageRootProvider
         slots: &[B256],
         hashed_storage: HashedStorage,
     ) -> ProviderResult<StorageMultiProof> {
-        StorageProof::overlay_storage_multiproof(self.tx(), address, slots, hashed_storage)
+        StorageProof::overlay_storage_multiproof(self.0.clone(), address, slots, hashed_storage)
             .map_err(ProviderError::from)
     }
 }
 
-impl<Provider: DBProvider + StateCommitmentProvider> StateProofProvider
-    for LatestStateProviderRef<'_, Provider>
+impl<Provider: DBProvider + StateCommitmentProvider + DatabaseRef> StateProofProvider
+    for LatestStateProviderRef<Provider>
 {
     fn proof(
         &self,
@@ -135,7 +138,8 @@ impl<Provider: DBProvider + StateCommitmentProvider> StateProofProvider
         address: Address,
         slots: &[B256],
     ) -> ProviderResult<AccountProof> {
-        Proof::overlay_account_proof(self.tx(), input, address, slots).map_err(ProviderError::from)
+        Proof::overlay_account_proof(self.0.clone(), input, address, slots)
+            .map_err(ProviderError::from)
     }
 
     fn multiproof(
@@ -143,7 +147,7 @@ impl<Provider: DBProvider + StateCommitmentProvider> StateProofProvider
         input: TrieInput,
         targets: MultiProofTargets,
     ) -> ProviderResult<MultiProof> {
-        Proof::overlay_multiproof(self.tx(), input, targets).map_err(ProviderError::from)
+        Proof::overlay_multiproof(self.0.clone(), input, targets).map_err(ProviderError::from)
     }
 
     fn witness(
@@ -151,12 +155,12 @@ impl<Provider: DBProvider + StateCommitmentProvider> StateProofProvider
         input: TrieInput,
         target: HashedPostState,
     ) -> ProviderResult<B256HashMap<Bytes>> {
-        TrieWitness::overlay_witness(self.tx(), input, target).map_err(ProviderError::from)
+        TrieWitness::overlay_witness(self.0.clone(), input, target).map_err(ProviderError::from)
     }
 }
 
 impl<Provider: DBProvider + StateCommitmentProvider> HashedPostStateProvider
-    for LatestStateProviderRef<'_, Provider>
+    for LatestStateProviderRef<Provider>
 {
     fn hashed_post_state(&self, bundle_state: &revm::db::BundleState) -> HashedPostState {
         HashedPostState::from_bundle_state::<
@@ -165,8 +169,8 @@ impl<Provider: DBProvider + StateCommitmentProvider> HashedPostStateProvider
     }
 }
 
-impl<Provider: DBProvider + BlockHashReader + StateCommitmentProvider> StateProvider
-    for LatestStateProviderRef<'_, Provider>
+impl<Provider: DBProvider + BlockHashReader + StateCommitmentProvider + DatabaseRef> StateProvider
+    for LatestStateProviderRef<Provider>
 {
     /// Get storage.
     fn storage(
@@ -190,25 +194,33 @@ impl<Provider: DBProvider + BlockHashReader + StateCommitmentProvider> StateProv
 }
 
 impl<Provider: StateCommitmentProvider> StateCommitmentProvider
-    for LatestStateProviderRef<'_, Provider>
+    for LatestStateProviderRef<Provider>
 {
     type StateCommitment = Provider::StateCommitment;
 }
 
 /// State provider for the latest state.
 #[derive(Debug)]
-pub struct LatestStateProvider<Provider>(Provider);
+pub struct LatestStateProvider<Provider>(Arc<Provider>);
 
 impl<Provider: DBProvider + StateCommitmentProvider> LatestStateProvider<Provider> {
     /// Create new state provider
-    pub const fn new(db: Provider) -> Self {
+    pub const fn new(db: Arc<Provider>) -> Self {
         Self(db)
     }
 
     /// Returns a new provider that takes the `TX` as reference
     #[inline(always)]
-    const fn as_ref(&self) -> LatestStateProviderRef<'_, Provider> {
-        LatestStateProviderRef::new(&self.0)
+    fn as_ref(&self) -> LatestStateProviderRef<Provider> {
+        LatestStateProviderRef::new(self.0.clone())
+    }
+}
+
+impl<Provider: DatabaseRef> DatabaseRef for LatestStateProvider<Provider> {
+    type Tx = Provider::Tx;
+
+    fn tx_reference(&self) -> &Self::Tx {
+        self.0.tx_reference()
     }
 }
 
@@ -217,7 +229,7 @@ impl<Provider: StateCommitmentProvider> StateCommitmentProvider for LatestStateP
 }
 
 // Delegates all provider impls to [LatestStateProviderRef]
-delegate_provider_impls!(LatestStateProvider<Provider> where [Provider: DBProvider + BlockHashReader + StateCommitmentProvider]);
+delegate_provider_impls!(LatestStateProvider<Provider> where [Provider: DBProvider + BlockHashReader + StateCommitmentProvider + DatabaseRef]);
 
 #[cfg(test)]
 mod tests {
@@ -226,7 +238,7 @@ mod tests {
     const fn assert_state_provider<T: StateProvider>() {}
     #[allow(dead_code)]
     const fn assert_latest_state_provider<
-        T: DBProvider + BlockHashReader + StateCommitmentProvider,
+        T: DBProvider + BlockHashReader + StateCommitmentProvider + DatabaseRef,
     >() {
         assert_state_provider::<LatestStateProvider<T>>();
     }

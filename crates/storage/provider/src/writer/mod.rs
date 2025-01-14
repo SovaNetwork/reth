@@ -11,6 +11,8 @@ use reth_primitives::{NodePrimitives, StaticFileSegment};
 use reth_primitives_traits::SignedTransaction;
 use reth_storage_api::{DBProvider, StageCheckpointWriter, TransactionsProviderExt};
 use reth_storage_errors::writer::UnifiedStorageWriterError;
+use reth_trie::StateRoot;
+use reth_trie_db::{DatabaseRef, DatabaseStateRoot};
 use revm::db::OriginalValuesKnown;
 use std::sync::Arc;
 use tracing::debug;
@@ -18,41 +20,35 @@ use tracing::debug;
 /// [`UnifiedStorageWriter`] is responsible for managing the writing to storage with both database
 /// and static file providers.
 #[derive(Debug)]
-pub struct UnifiedStorageWriter<'a, ProviderDB, ProviderSF> {
-    database: &'a ProviderDB,
+pub struct UnifiedStorageWriter<ProviderDB, ProviderSF> {
+    database: Arc<ProviderDB>,
     static_file: Option<ProviderSF>,
 }
 
-impl<'a, ProviderDB, ProviderSF> UnifiedStorageWriter<'a, ProviderDB, ProviderSF> {
+impl<ProviderDB, ProviderSF> UnifiedStorageWriter<ProviderDB, ProviderSF> {
     /// Creates a new instance of [`UnifiedStorageWriter`].
     ///
     /// # Parameters
     /// - `database`: An optional reference to a database provider.
     /// - `static_file`: An optional mutable reference to a static file instance.
-    pub const fn new(database: &'a ProviderDB, static_file: Option<ProviderSF>) -> Self {
+    pub const fn new(database: Arc<ProviderDB>, static_file: Option<ProviderSF>) -> Self {
         Self { database, static_file }
     }
 
     /// Creates a new instance of [`UnifiedStorageWriter`] from a database provider and a static
     /// file instance.
-    pub fn from<P>(database: &'a P, static_file: ProviderSF) -> Self
-    where
-        P: AsRef<ProviderDB>,
-    {
-        Self::new(database.as_ref(), Some(static_file))
+    pub fn from(database: Arc<ProviderDB>, static_file: ProviderSF) -> Self {
+        Self::new(database, Some(static_file))
     }
 
     /// Creates a new instance of [`UnifiedStorageWriter`] from a database provider.
-    pub fn from_database<P>(database: &'a P) -> Self
-    where
-        P: AsRef<ProviderDB>,
-    {
-        Self::new(database.as_ref(), None)
+    pub fn from_database(database: Arc<ProviderDB>) -> Self {
+        Self::new(database, None)
     }
 
     /// Returns a reference to the database writer.
-    const fn database(&self) -> &ProviderDB {
-        self.database
+    fn database(&self) -> Arc<ProviderDB> {
+        self.database.clone()
     }
 
     /// Returns a reference to the static file instance.
@@ -77,7 +73,7 @@ impl<'a, ProviderDB, ProviderSF> UnifiedStorageWriter<'a, ProviderDB, ProviderSF
     }
 }
 
-impl UnifiedStorageWriter<'_, (), ()> {
+impl UnifiedStorageWriter<(), ()> {
     /// Commits both storage types in the right order.
     ///
     /// For non-unwinding operations it makes more sense to commit the static files first, since if
@@ -115,7 +111,7 @@ impl UnifiedStorageWriter<'_, (), ()> {
     }
 }
 
-impl<ProviderDB> UnifiedStorageWriter<'_, ProviderDB, &StaticFileProvider<ProviderDB::Primitives>>
+impl<ProviderDB> UnifiedStorageWriter<ProviderDB, &StaticFileProvider<ProviderDB::Primitives>>
 where
     ProviderDB: DBProvider<Tx: DbTx + DbTxMut>
         + BlockWriter
@@ -126,7 +122,8 @@ where
         + StageCheckpointWriter
         + BlockExecutionWriter
         + AsRef<ProviderDB>
-        + StaticFileProviderFactory,
+        + StaticFileProviderFactory
+        + DatabaseRef,
 {
     /// Writes executed blocks and receipts to storage.
     pub fn save_blocks<N>(&self, blocks: Vec<ExecutedBlock<N>>) -> ProviderResult<()>
@@ -194,7 +191,12 @@ where
     pub fn remove_blocks_above(&self, block_number: u64) -> ProviderResult<()> {
         // IMPORTANT: we use `block_number+1` to make sure we remove only what is ABOVE the block
         debug!(target: "provider::storage_writer", ?block_number, "Removing blocks from database above block_number");
-        self.database().remove_block_and_execution_above(block_number, StorageLocation::Both)?;
+        let state_root = StateRoot::from_provider(self.database.clone());
+        self.database().remove_block_and_execution_above(
+            block_number,
+            StorageLocation::Both,
+            state_root,
+        )?;
 
         // Get highest static file block for the total block range
         let highest_static_file_block = self
@@ -1093,7 +1095,7 @@ mod tests {
             .collect();
 
         let provider_factory = create_test_provider_factory();
-        let provider_rw = provider_factory.database_provider_rw().unwrap();
+        let provider_rw = Arc::new(provider_factory.database_provider_rw().unwrap());
 
         // insert initial state to the database
         let tx = provider_rw.tx_ref();
@@ -1109,7 +1111,8 @@ mod tests {
             }
         }
 
-        let (_, updates) = StateRoot::from_tx(tx).root_with_updates().unwrap();
+        let (_, updates) =
+            StateRoot::from_provider(provider_rw.clone()).root_with_updates().unwrap();
         provider_rw.write_trie_updates(&updates).unwrap();
 
         let mut state = State::builder().with_bundle_update().build();
@@ -1117,7 +1120,7 @@ mod tests {
         let assert_state_root = |state: &State<EmptyDB>, expected: &PreState, msg| {
             assert_eq!(
                 StateRoot::overlay_root(
-                    tx,
+                    provider_rw.clone(),
                     provider_factory.hashed_post_state(&state.bundle_state)
                 )
                 .unwrap(),
@@ -1288,8 +1291,7 @@ mod tests {
         let address = Address::random();
         let hashed_address = keccak256(address);
         let provider_factory = create_test_provider_factory();
-        let provider_rw = provider_factory.provider_rw().unwrap();
-        let tx = provider_rw.tx_ref();
+        let provider_rw = Arc::new(provider_factory.provider_rw().unwrap());
 
         // insert initial account storage
         let init_storage = HashedStorage::from_iter(
@@ -1308,7 +1310,9 @@ mod tests {
 
         // calculate database storage root and write intermediate storage nodes.
         let (storage_root, _, storage_updates) =
-            StorageRoot::from_tx_hashed(tx, hashed_address).calculate(true).unwrap();
+            StorageRoot::from_provider_hashed(provider_rw.clone(), hashed_address)
+                .calculate(true)
+                .unwrap();
         assert_eq!(storage_root, storage_root_prehashed(init_storage.storage));
         assert!(!storage_updates.is_empty());
         provider_rw
@@ -1330,7 +1334,9 @@ mod tests {
         provider_rw.write_hashed_state(&state.clone().into_sorted()).unwrap();
 
         // re-calculate database storage root
-        let storage_root = StorageRoot::overlay_root(tx, address, updated_storage.clone()).unwrap();
+        let storage_root =
+            StorageRoot::overlay_root(provider_rw.clone(), address, updated_storage.clone())
+                .unwrap();
         assert_eq!(storage_root, storage_root_prehashed(updated_storage.storage));
     }
 }

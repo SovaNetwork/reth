@@ -51,7 +51,7 @@ use reth_trie::{
     hashed_cursor::HashedPostStateCursorFactory, proof::ProofBlindedProviderFactory,
     trie_cursor::InMemoryTrieCursorFactory, updates::TrieUpdates, HashedPostState, TrieInput,
 };
-use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseTrieCursorFactory};
+use reth_trie_db::{DatabaseHashedCursorFactory, DatabaseRef, DatabaseTrieCursorFactory};
 use reth_trie_parallel::root::{ParallelStateRoot, ParallelStateRootError};
 use revm_primitives::EvmState;
 use root::{StateRootComputeOutcome, StateRootConfig, StateRootTask};
@@ -567,7 +567,7 @@ where
         + Clone
         + 'static,
     <P as DatabaseProviderFactory>::Provider:
-        BlockReader<Block = N::Block, Header = N::BlockHeader>,
+        BlockReader<Block = N::Block, Header = N::BlockHeader> + DatabaseRef,
     E: BlockExecutorProvider<Primitives = N>,
     T: EngineTypes,
     V: EngineValidator<T, Block = N::Block>,
@@ -2273,13 +2273,13 @@ where
                     .map_err(|e| InsertBlockErrorKind::Other(Box::new(e)))?,
             );
 
-            let provider_ro = consistent_view.provider_ro()?;
+            let provider_ro = Arc::new(consistent_view.provider_ro()?);
             let nodes_sorted = state_root_config.nodes_sorted.clone();
             let state_sorted = state_root_config.state_sorted.clone();
             let prefix_sets = state_root_config.prefix_sets.clone();
 
             let trie_cursor = Arc::new(InMemoryTrieCursorFactory::new(
-                DatabaseTrieCursorFactory::new(provider_ro.tx_ref()),
+                DatabaseTrieCursorFactory::new(provider_ro.clone()),
                 nodes_sorted,
             ));
             let state_cursor = Arc::new(HashedPostStateCursorFactory::new(

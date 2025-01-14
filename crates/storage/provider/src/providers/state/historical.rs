@@ -63,7 +63,7 @@ pub enum HistoryInfo {
     MaybeInPlainState,
 }
 
-impl<'b, Provider: DBProvider + BlockNumReader + StateCommitmentProvider>
+impl<Provider: DBProvider + BlockNumReader + StateCommitmentProvider>
     HistoricalStateProviderRef<Provider>
 {
     /// Create new `StateProvider` for historical block number
@@ -466,7 +466,7 @@ impl<Provider: StateCommitmentProvider> StateCommitmentProvider
 #[derive(Debug)]
 pub struct HistoricalStateProvider<Provider> {
     /// Database provider.
-    provider: Provider,
+    provider: Arc<Provider>,
     /// State at the block number is the main indexer of the state.
     block_number: BlockNumber,
     /// Lowest blocks at which different parts of the state are available.
@@ -477,7 +477,7 @@ impl<Provider: DBProvider + BlockNumReader + StateCommitmentProvider>
     HistoricalStateProvider<Provider>
 {
     /// Create new `StateProvider` for historical block number
-    pub fn new(provider: Provider, block_number: BlockNumber) -> Self {
+    pub fn new(provider: Arc<Provider>, block_number: BlockNumber) -> Self {
         Self { provider, block_number, lowest_available_blocks: Default::default() }
     }
 
@@ -843,7 +843,7 @@ mod tests {
         // provider block_number == lowest available block number,
         // i.e. state at provider block is available
         let provider = HistoricalStateProviderRef::new_with_lowest_available_blocks(
-            db.clone(),
+            db,
             2,
             LowestAvailableBlocks {
                 account_history_block_number: Some(1),

@@ -66,7 +66,7 @@ pub fn insert_genesis<N: ProviderNodeTypes<ChainSpec = ChainSpec>>(
     provider_factory: &ProviderFactory<N>,
     chain_spec: Arc<N::ChainSpec>,
 ) -> ProviderResult<B256> {
-    let provider = provider_factory.provider_rw()?;
+    let provider = Arc::new(provider_factory.provider_rw()?);
 
     // Hash accounts and insert them into hashing table.
     let genesis = chain_spec.genesis();
@@ -85,7 +85,7 @@ pub fn insert_genesis<N: ProviderNodeTypes<ChainSpec = ChainSpec>>(
     });
     provider.insert_storage_for_hashing(alloc_storage)?;
 
-    let (root, updates) = StateRoot::from_tx(provider.tx_ref())
+    let (root, updates) = StateRoot::from_provider(provider.clone())
         .root_with_updates()
         .map_err(reth_db::DatabaseError::from)?;
     provider.write_trie_updates(&updates).unwrap();

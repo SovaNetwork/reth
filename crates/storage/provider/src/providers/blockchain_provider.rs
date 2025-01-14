@@ -996,10 +996,13 @@ mod tests {
                     lowest_memory_block.execution_output = Arc::new(execution_output);
 
                     // Push to disk
-                    let provider_rw = hook_provider.database_provider_rw().unwrap();
-                    UnifiedStorageWriter::from(&provider_rw, &hook_provider.static_file_provider())
-                        .save_blocks(vec![lowest_memory_block])
-                        .unwrap();
+                    let provider_rw = Arc::new(hook_provider.database_provider_rw().unwrap());
+                    UnifiedStorageWriter::from(
+                        provider_rw.clone(),
+                        &hook_provider.static_file_provider(),
+                    )
+                    .save_blocks(vec![lowest_memory_block])
+                    .unwrap();
                     UnifiedStorageWriter::commit(provider_rw).unwrap();
 
                     // Remove from memory

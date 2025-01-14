@@ -125,6 +125,14 @@ impl<DB: Database, N: NodeTypes + 'static> DatabaseProviderRW<DB, N> {
     }
 }
 
+impl<DB: Database, N: NodeTypes> DatabaseRef for DatabaseProviderRW<DB, N> {
+    type Tx = <DB as Database>::TXMut;
+
+    fn tx_reference(&self) -> &Self::Tx {
+        &self.0.tx_ref()
+    }
+}
+
 impl<DB: Database, N: NodeTypes> From<DatabaseProviderRW<DB, N>>
     for DatabaseProvider<<DB as Database>::TXMut, N>
 {
@@ -160,7 +168,7 @@ impl<TX: DbTx + 'static, N: NodeTypes> DatabaseProvider<TX, N> {
     /// State provider for latest state
     pub fn latest<'a>(&'a self) -> Box<dyn StateProvider + 'a> {
         trace!(target: "providers::db", "Returning latest state provider");
-        Box::new(LatestStateProviderRef::new(self))
+        Box::new(LatestStateProviderRef::new(Arc::new(*self)))
     }
 
     /// Storage provider for state at that given block hash
@@ -173,7 +181,7 @@ impl<TX: DbTx + 'static, N: NodeTypes> DatabaseProvider<TX, N> {
         if block_number == self.best_block_number().unwrap_or_default() &&
             block_number == self.last_block_number().unwrap_or_default()
         {
-            return Ok(Box::new(LatestStateProviderRef::new(self)))
+            return Ok(Box::new(LatestStateProviderRef::new(Arc::new(*self))))
         }
 
         // +1 as the changeset that we want is the one that was applied after this block.
@@ -384,7 +392,7 @@ impl<TX: DbTx + 'static, N: NodeTypes> TryIntoHistoricalStateProvider for Databa
         if block_number == self.best_block_number().unwrap_or_default() &&
             block_number == self.last_block_number().unwrap_or_default()
         {
-            return Ok(Box::new(LatestStateProvider::new(self)))
+            return Ok(Box::new(LatestStateProvider::new(Arc::new(self))))
         }
 
         // +1 as the changeset that we want is the one that was applied after this block.
@@ -395,7 +403,7 @@ impl<TX: DbTx + 'static, N: NodeTypes> TryIntoHistoricalStateProvider for Databa
         let storage_history_prune_checkpoint =
             self.get_prune_checkpoint(PruneSegment::StorageHistory)?;
 
-        let mut state_provider = HistoricalStateProvider::new(self, block_number);
+        let mut state_provider = HistoricalStateProvider::new(Arc::new(self), block_number);
 
         // If we pruned account or storage history, we can't return state on every historical block.
         // Instead, we should cap it at the latest prune checkpoint for corresponding prune segment.

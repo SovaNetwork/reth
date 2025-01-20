@@ -530,6 +530,12 @@ tables! {
         type Key = ChainStateKey;
         type Value = BlockNumber;
     }
+
+    table StorageSlotLocks {
+        type Key = Address;
+        type Value = String;
+        type SubKey = String;
+    }
 }
 
 /// Keys for the `ChainState` table.

@@ -20,7 +20,7 @@ pub use raw::{RawDupSort, RawKey, RawTable, RawValue, TableRawRow};
 pub(crate) mod utils;
 
 use alloy_consensus::Header;
-use alloy_primitives::{Address, BlockHash, BlockNumber, TxHash, TxNumber, B256};
+use alloy_primitives::{Address, BlockHash, BlockNumber, TxHash, TxNumber, B256, U32};
 use reth_db_api::{
     models::{
         accounts::BlockNumberAddress,
@@ -38,6 +38,120 @@ use reth_stages_types::StageCheckpoint;
 use reth_trie_common::{BranchNodeCompact, StorageTrieEntry, StoredNibbles, StoredNibblesSubKey};
 use serde::{Deserialize, Serialize};
 use std::fmt;
+
+use alloy_primitives::hex;
+
+/// UTXO struct
+#[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct UTXO {
+    /// BTC txid, 32 bytes
+    pub txid: String,
+
+    /// BTC UTXO vout, 4 bytes
+    pub vout: U32,
+}
+
+impl UTXO {
+    /// Constructor
+    pub fn new(txid: String, vout: U32) -> Result<Self, String> {
+        // ensure txid is 32 bytes
+        if txid.len() != 64 {
+            return Err("TXID must be 32 bytes".to_string());
+        }
+
+        Ok(Self { txid, vout })
+    }
+}
+
+// Encode and Decode are used when writing database keys
+impl Encode for UTXO {
+    type Encoded = [u8; 36];
+
+    fn encode(self) -> Self::Encoded {
+        let mut encoded = [0u8; 36];
+
+        // Convert txid to bytes (32) and copy to the first 32 bytes of `encoded`
+        let txid_bytes = hex::decode(&self.txid).expect("Invalid hex string");
+        if txid_bytes.len() > 32 {
+            // This shouldn't be an issue if I use the Hash type from the bitcoin crate later
+            panic!("txid is too long to encode");
+        }
+        encoded[32 - txid_bytes.len()..32].copy_from_slice(&txid_bytes);
+
+        // Convert vout to big-endian bytes and copy to the last 4 bytes of `encoded`
+        let vout_bytes: [u8; 32]  = self.vout.to_be_bytes();
+        encoded[32..].copy_from_slice(&vout_bytes);
+
+        encoded
+    }
+}
+
+impl Decode for UTXO {
+    fn decode(value: &[u8]) -> Result<Self, reth_db_api::DatabaseError> {
+        // Ensure the input has enough length for decoding
+        if value.len() < 36 {
+            return Err(reth_db_api::DatabaseError::Decode);
+        }
+
+        // Decode `txid`
+        let txid_bytes = &value[0..32];
+        let txid_fixed: [u8; 32] = txid_bytes
+            .try_into()
+            .map_err(|_| reth_db_api::DatabaseError::Decode)?;
+        let txid = hex::encode(txid_fixed);
+
+        // Decode `vout`
+        let vout_bytes = &value[32..36];
+        let vout_fixed: [u8; 4] = vout_bytes
+            .try_into()
+            .map_err(|_| reth_db_api::DatabaseError::Decode)?;
+        let vout = U32::from_be_bytes(vout_fixed);
+
+        // Return the constructed object
+        Ok(Self { txid, vout })
+    }
+
+}
+
+// Compress and Decomporess are used when writing database values
+use reth_db_api::table::{Compress, Decompress};
+impl Compress for UTXO {
+    type Compressed = Vec<u8>; // Using Vec<u8> for compressed data
+
+    fn compress(self) -> Self::Compressed {
+        let mut buf = Vec::new();
+        self.compress_to_buf(&mut buf);
+        buf
+    }
+
+    fn compress_to_buf<B: bytes::BufMut + AsMut<[u8]>>(&self, buf: &mut B) {
+        // Compress `txid` as raw bytes
+        let txid_bytes = hex::decode(&self.txid).expect("Invalid hex string for txid");
+        assert_eq!(txid_bytes.len(), 32, "txid must be exactly 32 bytes");
+        buf.put_slice(&txid_bytes);
+
+        // Compress `vout` as big-endian bytes
+        buf.put_u32(self.vout.to::<u32>());
+    }
+}
+
+impl Decompress for UTXO {
+    fn decompress(value: &[u8]) -> Result<Self, crate::DatabaseError> {
+        if value.len() < 36 {
+            return Err(crate::DatabaseError::Decode);
+        }
+
+        // Extract txid bytes and decode them to a hex string
+        let txid_bytes = &value[0..32];
+        let txid = hex::encode(txid_bytes);
+
+        // Extract vout bytes and convert them to a U32
+        let vout_bytes: [u8; 4] = value[32..36].try_into().unwrap();
+        let vout = U32::from_be_bytes(vout_bytes);
+
+        Ok(Self { txid, vout })
+    }
+}
 
 /// Enum for the types of tables present in libmdbx.
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -532,9 +646,9 @@ tables! {
     }
 
     table StorageSlotLocks {
-        type Key = Address;
-        type Value = String;
-        type SubKey = String;
+        type Key = Vec<u8>;
+        type Value = UTXO;
+        //type SubKey = Vec<u8>;
     }
 }
 

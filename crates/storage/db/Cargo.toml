@@ -115,6 +115,7 @@ arbitrary = [
 optimism = ["reth-db-api/optimism"]
 op = ["reth-db-api/op"]
 disable-lock = []
+serde = []
 
 [[bench]]
 name = "hash_keys"

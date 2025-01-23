@@ -8,6 +8,8 @@ use reth_primitives::{RecoveredBlock, SealedBlock, SealedHeader};
 use reth_storage_errors::provider::ProviderResult;
 use std::ops::RangeInclusive;
 
+use reth_db::{tables};
+
 /// A helper enum that represents the origin of the requested block.
 ///
 /// This helper type's sole purpose is to give the caller more control over from where blocks can be
@@ -421,3 +423,10 @@ pub trait ChainStateBlockWriter: Send + Sync {
     /// Saves the given safe block number in the DB.
     fn save_safe_block_number(&self, block_number: BlockNumber) -> ProviderResult<()>;
 }
+
+/// StorageSlotLocksWriter
+pub trait StorageSlotLocksWriter: Send + Sync {
+    /// insert
+    fn insert_storage_slot_lock(&self, key: Vec<u8>, value: tables::UTXO) -> ProviderResult<()>;
+}
+

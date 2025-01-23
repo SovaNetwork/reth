@@ -2,16 +2,25 @@ use alloy_consensus::BlockHeader;
 use alloy_primitives::{Address, B256};
 use alloy_rpc_types_eth::{Filter, FilteredParams};
 use reth_chainspec::ChainSpecBuilder;
-use reth_db::{open_db_read_only, DatabaseEnv};
+use reth_db::{open_db_read_only, DatabaseEnv };
 use reth_node_ethereum::EthereumNode;
 use reth_node_types::NodeTypesWithDBAdapter;
 use reth_primitives::{SealedBlock, SealedHeader, TransactionSigned};
 use reth_primitives_traits::transaction::signed::SignedTransaction;
 use reth_provider::{
     providers::StaticFileProvider, AccountReader, BlockReader, BlockSource, HeaderProvider,
-    ProviderFactory, ReceiptProvider, StateProvider, TransactionsProvider,
+    ProviderFactory, ReceiptProvider, StateProvider, TransactionsProvider, StorageSlotLocksWriter
 };
 use std::{path::Path, sync::Arc};
+
+use alloy_primitives::hex;
+use alloy_primitives::{ U32 };
+use reth_db::{
+    tables::{
+        StorageSlotLocks,
+        UTXO
+    }
+};
 
 // Providers are zero cost abstractions on top of an opened MDBX Transaction
 // exposing a familiar API to query the chain's information without requiring knowledge
@@ -34,26 +43,15 @@ fn main() -> eyre::Result<()> {
         StaticFileProvider::read_only(db_path.join("static_files"), true)?,
     );
 
-    // This call opens a RO transaction on the database. To write to the DB you'd need to call
-    // the `provider_rw` function and look for the `Writer` variants of the traits.
-    let provider = factory.provider()?;
+    let mut provider = factory.provider_rw().unwrap();
 
-    // Run basic queries against the DB
-    let block_num = 100;
-    header_provider_example(&provider, block_num)?;
-    block_provider_example(&provider, block_num)?;
-    txs_provider_example(&provider)?;
-    receipts_provider_example(&provider)?;
+    let key = "key".to_string();
+    let key_bytes = key.into_bytes();
+    let txid = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9830".to_string();
+    let vout = U32::from(0);
+    let utxo = UTXO { txid, vout };
 
-    // Closes the RO transaction opened in the `factory.provider()` call. This is optional and
-    // would happen anyway at the end of the function scope.
-    drop(provider);
-
-    // Run the example against latest state
-    state_provider_example(factory.latest()?)?;
-
-    // Run it with historical state
-    state_provider_example(factory.history_by_block_number(block_num)?)?;
+    let tx = provider.insert_storage_slot_lock(key_bytes, utxo);
 
     Ok(())
 }

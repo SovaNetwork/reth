@@ -3067,6 +3067,7 @@ dependencies = [
  "eyre",
  "reth-chainspec",
  "reth-db",
+ "reth-db-api",
  "reth-node-ethereum",
  "reth-node-types",
  "reth-primitives",

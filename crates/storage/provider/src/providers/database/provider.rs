@@ -18,6 +18,7 @@ use crate::{
     StateProviderBox, StateWriter, StaticFileProviderFactory, StatsReader, StorageLocation,
     StorageReader, StorageTrieWriter, TransactionVariant, TransactionsProvider,
     TransactionsProviderExt, TrieWriter, WithdrawalsProvider, StorageSlotLocksWriter,
+    StorageSlotLocksReader,
 };
 use alloy_consensus::{transaction::TransactionMeta, BlockHeader, Header};
 use alloy_eips::{eip2718::Encodable2718, eip4895::Withdrawals, BlockHashOrNumber};
@@ -3172,5 +3173,11 @@ impl<TX: DbTx + 'static, N: NodeTypes + 'static> DBProvider for DatabaseProvider
 impl<TX: DbTxMut, N: NodeTypes> StorageSlotLocksWriter for DatabaseProvider<TX, N> {
     fn insert_storage_slot_lock(&self, key: Vec<u8>, value: tables::UTXO) -> ProviderResult<()> {
         Ok(self.tx.put::<tables::StorageSlotLocks>(key, value)?)
+    }
+}
+
+impl<TX: DbTx + 'static, N: NodeTypes> StorageSlotLocksReader for DatabaseProvider<TX, N> {
+    fn get_storage_slot_lock(&self, key: Vec<u8>) -> ProviderResult<Option<tables::UTXO>> {
+        Ok(self.tx.get::<tables::StorageSlotLocks>(key)?)
     }
 }

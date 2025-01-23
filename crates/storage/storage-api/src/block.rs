@@ -430,3 +430,9 @@ pub trait StorageSlotLocksWriter: Send + Sync {
     fn insert_storage_slot_lock(&self, key: Vec<u8>, value: tables::UTXO) -> ProviderResult<()>;
 }
 
+/// StorageSlotLocksReader
+pub trait StorageSlotLocksReader: Send + Sync {
+    /// get
+    fn get_storage_slot_lock(&self, key: Vec<u8>) -> ProviderResult<Option<tables::UTXO>>;
+}
+

@@ -2,17 +2,16 @@ use alloy_consensus::BlockHeader;
 use alloy_primitives::{Address, B256};
 use alloy_rpc_types_eth::{Filter, FilteredParams};
 use reth_chainspec::ChainSpecBuilder;
-use reth_db::{open_db_read_only, DatabaseEnv };
+use reth_db::{open_db, DatabaseEnv };
 use reth_node_ethereum::EthereumNode;
 use reth_node_types::NodeTypesWithDBAdapter;
 use reth_primitives::{SealedBlock, SealedHeader, TransactionSigned};
 use reth_primitives_traits::transaction::signed::SignedTransaction;
 use reth_provider::{
     providers::StaticFileProvider, AccountReader, BlockReader, BlockSource, HeaderProvider,
-    ProviderFactory, ReceiptProvider, StateProvider, TransactionsProvider, StorageSlotLocksWriter
+    ProviderFactory, ReceiptProvider, StateProvider, TransactionsProvider, StorageSlotLocksWriter, StorageSlotLocksReader
 };
 use std::{path::Path, sync::Arc};
-
 use alloy_primitives::hex;
 use alloy_primitives::{ U32 };
 use reth_db::{
@@ -32,7 +31,7 @@ fn main() -> eyre::Result<()> {
     // Opens a RO handle to the database file.
     let db_path = std::env::var("RETH_DB_PATH")?;
     let db_path = Path::new(&db_path);
-    let db = open_db_read_only(db_path.join("db").as_path(), Default::default())?;
+    let db = open_db(db_path.join("db").as_path(), Default::default())?;
 
     // Instantiate a provider factory for Ethereum mainnet using the provided DB.
     // TODO: Should the DB version include the spec so that you do not need to specify it here?
@@ -43,15 +42,38 @@ fn main() -> eyre::Result<()> {
         StaticFileProvider::read_only(db_path.join("static_files"), true)?,
     );
 
-    let mut provider = factory.provider_rw().unwrap();
+    let provider = factory.provider_rw().unwrap();
 
     let key = "key".to_string();
-    let key_bytes = key.into_bytes();
-    let txid = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9830".to_string();
+    let key_bytes = key.clone().into_bytes();
+    let txid = "f4184fc596403b9d638783cf57adfe4c75c605f6356fbc91338530e9831e9e16".to_string();
     let vout = U32::from(0);
     let utxo = UTXO { txid, vout };
 
-    let tx = provider.insert_storage_slot_lock(key_bytes, utxo);
+    let result = provider.insert_storage_slot_lock(key_bytes, utxo);
+    match result {
+        Ok(()) => {
+            println!("Wrote UTXO to DB with key: {}", key);
+        }
+        Err(err) => {
+            println!("An error occurred writing UTXO: {}", err);
+        }
+    }
+
+    let k = key.clone().into_bytes();
+    let lock = provider.get_storage_slot_lock(k);
+
+    match lock {
+        Ok(Some(value)) => {
+            println!("TXID is: {}", value.txid);
+        }
+        Ok(None) => {
+            println!("No UTXO was found for key {}", key);
+        }
+        Err(err) => {
+            println!("An error occurred reading UTXO: {}", err);
+        }
+    }
 
     Ok(())
 }
